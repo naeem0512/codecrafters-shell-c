@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <sys/wait.h>
 
 #define MAX_ARGS 10
 #define MAX_ARG_LENGTH 100
@@ -76,6 +77,50 @@ void handle_type(char *input) {
     printf("%s: not found\n", cmd);
 }
 
+void execute_command(char *input) {
+    char *args[MAX_ARGS];
+    int arg_count = 0;
+    
+    // Split input into arguments
+    char *token = strtok(input, " ");
+    while (token != NULL && arg_count < MAX_ARGS - 1) {
+        args[arg_count++] = token;
+        token = strtok(NULL, " ");
+    }
+    args[arg_count] = NULL;  // NULL terminate the argument list
+    
+    if (arg_count == 0) return;  // Empty command
+    
+    // Find the executable
+    char *exec_path = find_executable(args[0]);
+    if (!exec_path) {
+        printf("%s: command not found\n", args[0]);
+        return;
+    }
+    
+    // Fork and execute
+    pid_t pid = fork();
+    if (pid < 0) {
+        perror("fork failed");
+        free(exec_path);
+        return;
+    }
+    
+    if (pid == 0) {
+        // Child process
+        execv(exec_path, args);
+        // If execv returns, it failed
+        perror("execv failed");
+        free(exec_path);
+        exit(1);
+    } else {
+        // Parent process
+        free(exec_path);
+        int status;
+        waitpid(pid, &status, 0);
+    }
+}
+
 int main(int argc, char *argv[]) {
   // Flush after every printf
   setbuf(stdout, NULL);
@@ -109,8 +154,8 @@ int main(int argc, char *argv[]) {
       continue;
     }
     
-    // Print error message for other commands
-    printf("%s: command not found\n", input);
+    // Execute external command
+    execute_command(input);
   }
   
   return 0;
