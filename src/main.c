@@ -9,8 +9,8 @@
 #define MAX_PATH_LENGTH 1024
 
 // List of builtin commands
-const char *builtins[] = {"echo", "exit", "type"};
-const int num_builtins = 3;
+const char *builtins[] = {"echo", "exit", "type", "pwd"};
+const int num_builtins = 4;
 
 int is_builtin(const char *cmd) {
     for (int i = 0; i < num_builtins; i++) {
@@ -75,6 +75,15 @@ void handle_type(char *input) {
     
     // If not found anywhere
     printf("%s: not found\n", cmd);
+}
+
+void handle_pwd(void) {
+    char cwd[MAX_PATH_LENGTH];
+    if (getcwd(cwd, sizeof(cwd)) != NULL) {
+        printf("%s\n", cwd);
+    } else {
+        perror("pwd");
+    }
 }
 
 void execute_command(char *input) {
@@ -151,6 +160,12 @@ int main(int argc, char *argv[]) {
     // Check for type command
     if (strncmp(input, "type ", 5) == 0) {
       handle_type(input);
+      continue;
+    }
+    
+    // Check for pwd command
+    if (strcmp(input, "pwd") == 0) {
+      handle_pwd();
       continue;
     }
     
