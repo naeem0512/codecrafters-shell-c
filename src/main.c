@@ -3,14 +3,15 @@
 #include <string.h>
 #include <unistd.h>
 #include <sys/wait.h>
+#include <errno.h>
 
 #define MAX_ARGS 10
 #define MAX_ARG_LENGTH 100
 #define MAX_PATH_LENGTH 1024
 
 // List of builtin commands
-const char *builtins[] = {"echo", "exit", "type", "pwd"};
-const int num_builtins = 4;
+const char *builtins[] = {"echo", "exit", "type", "pwd", "cd"};
+const int num_builtins = 5;
 
 int is_builtin(const char *cmd) {
     for (int i = 0; i < num_builtins; i++) {
@@ -83,6 +84,26 @@ void handle_pwd(void) {
         printf("%s\n", cwd);
     } else {
         perror("pwd");
+    }
+}
+
+void handle_cd(char *input) {
+    // Skip "cd " part (3 characters)
+    char *path = input + 3;
+    
+    // Skip leading spaces
+    while (*path == ' ') path++;
+    
+    // Check if path is empty
+    if (*path == '\0') {
+        fprintf(stderr, "cd: missing argument\n");
+        return;
+    }
+    
+    // Try to change directory
+    if (chdir(path) != 0) {
+        // Get the error message
+        fprintf(stderr, "cd: %s: %s\n", path, strerror(errno));
     }
 }
 
@@ -166,6 +187,12 @@ int main(int argc, char *argv[]) {
     // Check for pwd command
     if (strcmp(input, "pwd") == 0) {
       handle_pwd();
+      continue;
+    }
+    
+    // Check for cd command
+    if (strncmp(input, "cd ", 3) == 0) {
+      handle_cd(input);
       continue;
     }
     
