@@ -147,47 +147,97 @@ Redirection* parse_redirection(char **input) {
 }
 
 void handle_echo(char *input) {
+    // Make a copy of the input string because parse_redirection will modify it
+    char *input_copy = strdup(input);
+    if (!input_copy) {
+        perror("strdup failed");
+        return;
+    }
+    
     // Parse redirection if any
-    Redirection *redir = parse_redirection(&input);
+    Redirection *redir = parse_redirection(&input_copy);
     int original_stdout = -1;
+    int original_stderr = -1;
     int output_fd = -1;
     
     if (redir) {
-        // Save original stdout
-        original_stdout = dup(STDOUT_FILENO);
-        if (original_stdout == -1) {
-            perror("dup failed");
-            free(redir->filename);
-            free(redir);
-            return;
-        }
-        
-        // Open output file
-        int flags = O_WRONLY | O_CREAT;
-        flags |= redir->append ? O_APPEND : O_TRUNC;
-        output_fd = open(redir->filename, flags, 0644);
-        if (output_fd == -1) {
-            perror("open failed");
-            close(original_stdout);
-            free(redir->filename);
-            free(redir);
-            return;
-        }
-        
-        // Redirect stdout
-        if (dup2(output_fd, STDOUT_FILENO) == -1) {
-            perror("dup2 failed");
-            close(original_stdout);
+        // Only redirect if the specified fd matches
+        // For echo, we only care about stdout (fd=1) or stderr (fd=2)
+        if (redir->fd == 1) {
+            // Save original stdout
+            original_stdout = dup(STDOUT_FILENO);
+            if (original_stdout == -1) {
+                perror("dup failed");
+                free(redir->filename);
+                free(redir);
+                free(input_copy);
+                return;
+            }
+            
+            // Open output file
+            int flags = O_WRONLY | O_CREAT;
+            flags |= redir->append ? O_APPEND : O_TRUNC;
+            output_fd = open(redir->filename, flags, 0644);
+            if (output_fd == -1) {
+                perror("open failed");
+                close(original_stdout);
+                free(redir->filename);
+                free(redir);
+                free(input_copy);
+                return;
+            }
+            
+            // Redirect stdout
+            if (dup2(output_fd, STDOUT_FILENO) == -1) {
+                perror("dup2 failed");
+                close(original_stdout);
+                close(output_fd);
+                free(redir->filename);
+                free(redir);
+                free(input_copy);
+                return;
+            }
             close(output_fd);
-            free(redir->filename);
-            free(redir);
-            return;
+        } else if (redir->fd == 2) {
+            // Save original stderr
+            original_stderr = dup(STDERR_FILENO);
+            if (original_stderr == -1) {
+                perror("dup failed");
+                free(redir->filename);
+                free(redir);
+                free(input_copy);
+                return;
+            }
+            
+            // Open output file
+            int flags = O_WRONLY | O_CREAT;
+            flags |= redir->append ? O_APPEND : O_TRUNC;
+            output_fd = open(redir->filename, flags, 0644);
+            if (output_fd == -1) {
+                perror("open failed");
+                close(original_stderr);
+                free(redir->filename);
+                free(redir);
+                free(input_copy);
+                return;
+            }
+            
+            // Redirect stderr
+            if (dup2(output_fd, STDERR_FILENO) == -1) {
+                perror("dup2 failed");
+                close(original_stderr);
+                close(output_fd);
+                free(redir->filename);
+                free(redir);
+                free(input_copy);
+                return;
+            }
+            close(output_fd);
         }
-        close(output_fd);
     }
     
     // Skip "echo " part (5 characters)
-    char *str = input + 5;
+    char *str = input_copy + 5;
     int first_arg = 1;
     int last_was_quoted = 0;  // Track if last argument was quoted
     
@@ -197,7 +247,7 @@ void handle_echo(char *input) {
         if (*str == '\0') break;
         
         // Check if this is an adjacent quoted string
-        int is_adjacent = last_was_quoted && str > input + 5 && 
+        int is_adjacent = last_was_quoted && str > input_copy + 5 && 
                          ((*(str - 1) == '\'') || (*(str - 1) == '"'));
         
         // Print space between arguments, but not between adjacent quoted strings
@@ -218,7 +268,7 @@ void handle_echo(char *input) {
                     str++; // Skip the backslash
                     if (*str == '\0') {
                         fprintf(stderr, "Error: Unmatched backslash\n");
-                        return;
+                        goto cleanup;
                     }
                     // Only escape special characters in double quotes
                     if (*str == '\\' || *str == '$' || *str == '"' || *str == '\n') {
@@ -235,7 +285,7 @@ void handle_echo(char *input) {
                 str++; // Skip closing quote
             } else {
                 fprintf(stderr, "Error: Unmatched %c\n", quote);
-                return;
+                goto cleanup;
             }
         } else {
             // Handle unquoted argument
@@ -245,7 +295,7 @@ void handle_echo(char *input) {
                     str++; // Skip the backslash
                     if (*str == '\0') {
                         fprintf(stderr, "Error: Unmatched backslash\n");
-                        return;
+                        goto cleanup;
                     }
                     if (*str == '\n') {
                         // Handle line continuation
@@ -262,15 +312,29 @@ void handle_echo(char *input) {
     }
     printf("\n");
     
+cleanup:
     // Restore stdout if redirected
-    if (redir) {
+    if (original_stdout != -1) {
         if (dup2(original_stdout, STDOUT_FILENO) == -1) {
             perror("dup2 failed");
         }
         close(original_stdout);
+    }
+    
+    // Restore stderr if redirected
+    if (original_stderr != -1) {
+        if (dup2(original_stderr, STDERR_FILENO) == -1) {
+            perror("dup2 failed");
+        }
+        close(original_stderr);
+    }
+    
+    if (redir) {
         free(redir->filename);
         free(redir);
     }
+    
+    free(input_copy);
 }
 
 void handle_type(char *input) {
@@ -488,7 +552,30 @@ void execute_command(char *input) {
     // Find the executable
     char *exec_path = find_executable(args[0]);
     if (!exec_path) {
-        printf("%s: command not found\n", args[0]);
+        // For command not found, we need to handle stderr redirection
+        if (redir && redir->fd == 2) {
+            // Open the error file
+            int flags = O_WRONLY | O_CREAT;
+            flags |= redir->append ? O_APPEND : O_TRUNC;
+            int error_fd = open(redir->filename, flags, 0666);
+            if (error_fd != -1) {
+                // Save original stderr
+                int original_stderr = dup(STDERR_FILENO);
+                if (original_stderr != -1) {
+                    // Redirect stderr to the file
+                    if (dup2(error_fd, STDERR_FILENO) != -1) {
+                        fprintf(stderr, "%s: command not found\n", args[0]);
+                        // Restore original stderr
+                        dup2(original_stderr, STDERR_FILENO);
+                        close(original_stderr);
+                    }
+                }
+                close(error_fd);
+            }
+        } else {
+            fprintf(stderr, "%s: command not found\n", args[0]);
+        }
+        
         // Free allocated arguments
         for (int i = 0; i < arg_count; i++) {
             free(args[i]);
@@ -559,7 +646,7 @@ void execute_command(char *input) {
                 exit(1);
             }
             
-            // Redirect stdout to the file
+            // Redirect the appropriate file descriptor
             if (dup2(output_fd, redir->fd) == -1) {
                 fprintf(stderr, "dup2 failed: %s\n", strerror(errno));
                 close(output_fd);
