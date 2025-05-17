@@ -6,6 +6,8 @@
 #include <sys/stat.h>  // For mkdir
 #include <errno.h>
 #include <fcntl.h>
+#include <readline/readline.h>
+#include <readline/history.h>
 
 #define MAX_ARGS 10
 #define MAX_ARG_LENGTH 100
@@ -21,6 +23,56 @@ typedef struct {
     char *filename;   // Target filename
     int append;       // Whether to append (>>) or truncate (>)
 } Redirection;
+
+// Function to generate completions for builtin commands
+char* command_generator(const char* text, int state) {
+    static int list_index, len;
+    const char *name;
+    
+    // If this is a new word to complete, initialize now
+    if (!state) {
+        list_index = 0;
+        len = strlen(text);
+    }
+    
+    // Return the next builtin command that matches
+    while (list_index < num_builtins) {
+        name = builtins[list_index++];
+        if (strncmp(name, text, len) == 0) {
+            // Allocate memory for the completion string with null terminator only
+            // Let readline handle adding the space automatically
+            char *completion = malloc(strlen(name) + 1);
+            if (completion) {
+                strcpy(completion, name);
+                return completion;
+            }
+        }
+    }
+    
+    return NULL;  // No more matches
+}
+
+// Function to attempt completion
+char** command_completion(const char* text, int start, int end) {
+    char **matches = NULL;
+    
+    // Only complete at the start of the line
+    if (start == 0) {
+        matches = rl_completion_matches(text, command_generator);
+    }
+    
+    return matches;
+}
+
+// Initialize readline
+void init_readline(void) {
+    // Tell readline to use our completion function
+    rl_attempted_completion_function = command_completion;
+    
+    // Disable filename completion
+    rl_completer_quote_characters = "";
+    rl_completer_word_break_characters = " \t\n\"\\'`@$><=;|&{(";
+}
 
 int is_builtin(const char *cmd) {
     for (int i = 0; i < num_builtins; i++) {
@@ -682,54 +734,65 @@ void execute_command(char *input) {
 }
 
 int main(int argc, char *argv[]) {
-  // Flush after every printf
-  setbuf(stdout, NULL);
-
-  while (1) {
-    printf("$ ");
+    // Initialize readline
+    init_readline();
     
-    // Wait for user input
-    char input[100];
-    if (fgets(input, 100, stdin) == NULL) {
-      break;  // Exit on EOF (Ctrl+D)
+    // Flush after every printf
+    setbuf(stdout, NULL);
+    
+    while (1) {
+        // Use readline to get input
+        char *input = readline("$ ");
+        if (!input) {
+            break;  // Exit on EOF (Ctrl+D)
+        }
+        
+        // Add non-empty commands to history
+        if (strlen(input) > 0) {
+            add_history(input);
+        }
+        
+        // Check for exit command
+        if (strcmp(input, "exit 0") == 0) {
+            free(input);
+            exit(0);
+        }
+        
+        // Check for echo command
+        if (strncmp(input, "echo ", 5) == 0) {
+            handle_echo(input);
+            free(input);
+            continue;
+        }
+        
+        // Check for type command
+        if (strncmp(input, "type ", 5) == 0) {
+            handle_type(input);
+            free(input);
+            continue;
+        }
+        
+        // Check for pwd command
+        if (strcmp(input, "pwd") == 0) {
+            handle_pwd();
+            free(input);
+            continue;
+        }
+        
+        // Check for cd command
+        if (strncmp(input, "cd ", 3) == 0) {
+            handle_cd(input);
+            free(input);
+            continue;
+        }
+        
+        // Execute external command
+        execute_command(input);
+        
+        // Free the input string
+        free(input);
     }
     
-    // Remove newline character from input
-    input[strcspn(input, "\n")] = 0;
-    
-    // Check for exit command
-    if (strcmp(input, "exit 0") == 0) {
-      exit(0);
-    }
-    
-    // Check for echo command
-    if (strncmp(input, "echo ", 5) == 0) {
-      handle_echo(input);
-      continue;
-    }
-    
-    // Check for type command
-    if (strncmp(input, "type ", 5) == 0) {
-      handle_type(input);
-      continue;
-    }
-    
-    // Check for pwd command
-    if (strcmp(input, "pwd") == 0) {
-      handle_pwd();
-      continue;
-    }
-    
-    // Check for cd command
-    if (strncmp(input, "cd ", 3) == 0) {
-      handle_cd(input);
-      continue;
-    }
-    
-    // Execute external command
-    execute_command(input);
-  }
-  
-  return 0;
+    return 0;
 }
 
