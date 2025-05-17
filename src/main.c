@@ -32,6 +32,16 @@ typedef struct {
     int capacity;
 } CompletionMatches;
 
+// Structure to hold pipeline components
+typedef struct {
+    char *cmd1;        // First command
+    char *cmd2;        // Second command
+    char *args1[MAX_ARGS];  // Arguments for first command
+    char *args2[MAX_ARGS];  // Arguments for second command
+    int arg_count1;    // Number of arguments for first command
+    int arg_count2;    // Number of arguments for second command
+} Pipeline;
+
 // Function to find executables in PATH that match a prefix
 char* find_executable_match(const char *prefix) {
     char *path = getenv("PATH");
@@ -622,7 +632,338 @@ void handle_cd(char *input) {
     }
 }
 
+// Function to parse a pipeline command
+Pipeline* parse_pipeline(char *input) {
+    Pipeline *pipeline = malloc(sizeof(Pipeline));
+    if (!pipeline) {
+        perror("malloc failed");
+        return NULL;
+    }
+    
+    // Initialize pipeline structure
+    pipeline->cmd1 = NULL;
+    pipeline->cmd2 = NULL;
+    pipeline->arg_count1 = 0;
+    pipeline->arg_count2 = 0;
+    memset(pipeline->args1, 0, sizeof(pipeline->args1));
+    memset(pipeline->args2, 0, sizeof(pipeline->args2));
+    
+    // Find the pipe operator
+    char *pipe_pos = strchr(input, '|');
+    if (!pipe_pos) {
+        free(pipeline);
+        return NULL;  // Not a pipeline
+    }
+    
+    // Split the input at the pipe
+    *pipe_pos = '\0';  // Terminate first command
+    char *cmd2_start = pipe_pos + 1;
+    
+    // Skip spaces after pipe
+    while (*cmd2_start == ' ') cmd2_start++;
+    
+    // Parse first command and its arguments
+    char *str = input;
+    while (pipeline->arg_count1 < MAX_ARGS - 1) {
+        // Skip leading spaces
+        while (*str == ' ') str++;
+        if (*str == '\0') break;
+        
+        // Allocate space for this argument
+        pipeline->args1[pipeline->arg_count1] = malloc(MAX_ARG_LENGTH);
+        if (!pipeline->args1[pipeline->arg_count1]) {
+            perror("malloc failed");
+            goto cleanup;
+        }
+        
+        int i = 0;
+        // Handle quoted argument
+        if (*str == '\'' || *str == '"') {
+            char quote = *str;
+            str++; // Skip opening quote
+            
+            while (*str != '\0' && *str != quote && i < MAX_ARG_LENGTH - 1) {
+                if (quote == '"' && *str == '\\') {
+                    str++; // Skip backslash
+                    if (*str == '\0') {
+                        fprintf(stderr, "Error: Unmatched backslash\n");
+                        goto cleanup;
+                    }
+                    if (*str == '\\' || *str == '$' || *str == '"' || *str == '\n') {
+                        pipeline->args1[pipeline->arg_count1][i++] = *str++;
+                    } else {
+                        pipeline->args1[pipeline->arg_count1][i++] = '\\';
+                        pipeline->args1[pipeline->arg_count1][i++] = *str++;
+                    }
+                } else {
+                    pipeline->args1[pipeline->arg_count1][i++] = *str++;
+                }
+            }
+            if (*str == quote) {
+                str++; // Skip closing quote
+            } else {
+                fprintf(stderr, "Error: Unmatched %c\n", quote);
+                goto cleanup;
+            }
+        } else {
+            // Handle unquoted argument
+            while (*str != '\0' && *str != ' ' && i < MAX_ARG_LENGTH - 1) {
+                if (*str == '\\') {
+                    str++; // Skip backslash
+                    if (*str == '\0') {
+                        fprintf(stderr, "Error: Unmatched backslash\n");
+                        goto cleanup;
+                    }
+                    if (*str == '\n') {
+                        str++; // Skip newline
+                    } else {
+                        pipeline->args1[pipeline->arg_count1][i++] = *str++;
+                    }
+                } else {
+                    pipeline->args1[pipeline->arg_count1][i++] = *str++;
+                }
+            }
+        }
+        pipeline->args1[pipeline->arg_count1][i] = '\0';
+        
+        if (i > 0) {
+            pipeline->arg_count1++;
+        } else {
+            free(pipeline->args1[pipeline->arg_count1]);
+        }
+    }
+    pipeline->args1[pipeline->arg_count1] = NULL;
+    
+    // Parse second command and its arguments
+    str = cmd2_start;
+    while (pipeline->arg_count2 < MAX_ARGS - 1) {
+        // Skip leading spaces
+        while (*str == ' ') str++;
+        if (*str == '\0') break;
+        
+        // Allocate space for this argument
+        pipeline->args2[pipeline->arg_count2] = malloc(MAX_ARG_LENGTH);
+        if (!pipeline->args2[pipeline->arg_count2]) {
+            perror("malloc failed");
+            goto cleanup;
+        }
+        
+        int i = 0;
+        // Handle quoted argument
+        if (*str == '\'' || *str == '"') {
+            char quote = *str;
+            str++; // Skip opening quote
+            
+            while (*str != '\0' && *str != quote && i < MAX_ARG_LENGTH - 1) {
+                if (quote == '"' && *str == '\\') {
+                    str++; // Skip backslash
+                    if (*str == '\0') {
+                        fprintf(stderr, "Error: Unmatched backslash\n");
+                        goto cleanup;
+                    }
+                    if (*str == '\\' || *str == '$' || *str == '"' || *str == '\n') {
+                        pipeline->args2[pipeline->arg_count2][i++] = *str++;
+                    } else {
+                        pipeline->args2[pipeline->arg_count2][i++] = '\\';
+                        pipeline->args2[pipeline->arg_count2][i++] = *str++;
+                    }
+                } else {
+                    pipeline->args2[pipeline->arg_count2][i++] = *str++;
+                }
+            }
+            if (*str == quote) {
+                str++; // Skip closing quote
+            } else {
+                fprintf(stderr, "Error: Unmatched %c\n", quote);
+                goto cleanup;
+            }
+        } else {
+            // Handle unquoted argument
+            while (*str != '\0' && *str != ' ' && i < MAX_ARG_LENGTH - 1) {
+                if (*str == '\\') {
+                    str++; // Skip backslash
+                    if (*str == '\0') {
+                        fprintf(stderr, "Error: Unmatched backslash\n");
+                        goto cleanup;
+                    }
+                    if (*str == '\n') {
+                        str++; // Skip newline
+                    } else {
+                        pipeline->args2[pipeline->arg_count2][i++] = *str++;
+                    }
+                } else {
+                    pipeline->args2[pipeline->arg_count2][i++] = *str++;
+                }
+            }
+        }
+        pipeline->args2[pipeline->arg_count2][i] = '\0';
+        
+        if (i > 0) {
+            pipeline->arg_count2++;
+        } else {
+            free(pipeline->args2[pipeline->arg_count2]);
+        }
+    }
+    pipeline->args2[pipeline->arg_count2] = NULL;
+    
+    // Set command names
+    if (pipeline->arg_count1 > 0) {
+        pipeline->cmd1 = strdup(pipeline->args1[0]);
+    }
+    if (pipeline->arg_count2 > 0) {
+        pipeline->cmd2 = strdup(pipeline->args2[0]);
+    }
+    
+    return pipeline;
+    
+cleanup:
+    // Free allocated memory on error
+    for (int i = 0; i < pipeline->arg_count1; i++) {
+        free(pipeline->args1[i]);
+    }
+    for (int i = 0; i < pipeline->arg_count2; i++) {
+        free(pipeline->args2[i]);
+    }
+    free(pipeline);
+    return NULL;
+}
+
+// Function to free pipeline structure
+void free_pipeline(Pipeline *pipeline) {
+    if (pipeline) {
+        free(pipeline->cmd1);
+        free(pipeline->cmd2);
+        for (int i = 0; i < pipeline->arg_count1; i++) {
+            free(pipeline->args1[i]);
+        }
+        for (int i = 0; i < pipeline->arg_count2; i++) {
+            free(pipeline->args2[i]);
+        }
+        free(pipeline);
+    }
+}
+
+// Function to execute a pipeline
+void execute_pipeline(Pipeline *pipeline) {
+    if (!pipeline || !pipeline->cmd1 || !pipeline->cmd2) {
+        return;
+    }
+    
+    // Find executables
+    char *exec_path1 = find_executable(pipeline->cmd1);
+    char *exec_path2 = find_executable(pipeline->cmd2);
+    
+    if (!exec_path1) {
+        fprintf(stderr, "%s: command not found\n", pipeline->cmd1);
+        free_pipeline(pipeline);
+        return;
+    }
+    if (!exec_path2) {
+        fprintf(stderr, "%s: command not found\n", pipeline->cmd2);
+        free(exec_path1);
+        free_pipeline(pipeline);
+        return;
+    }
+    
+    // Create pipe
+    int pipefd[2];
+    if (pipe(pipefd) == -1) {
+        perror("pipe failed");
+        free(exec_path1);
+        free(exec_path2);
+        free_pipeline(pipeline);
+        return;
+    }
+    
+    // Fork first child
+    pid_t pid1 = fork();
+    if (pid1 < 0) {
+        perror("fork failed");
+        close(pipefd[0]);
+        close(pipefd[1]);
+        free(exec_path1);
+        free(exec_path2);
+        free_pipeline(pipeline);
+        return;
+    }
+    
+    if (pid1 == 0) {
+        // First child process
+        // Close read end of pipe
+        close(pipefd[0]);
+        
+        // Redirect stdout to write end of pipe
+        if (dup2(pipefd[1], STDOUT_FILENO) == -1) {
+            perror("dup2 failed");
+            exit(1);
+        }
+        
+        // Close write end of pipe
+        close(pipefd[1]);
+        
+        // Execute first command
+        execv(exec_path1, pipeline->args1);
+        fprintf(stderr, "execv failed for %s: %s\n", exec_path1, strerror(errno));
+        exit(1);
+    }
+    
+    // Fork second child
+    pid_t pid2 = fork();
+    if (pid2 < 0) {
+        perror("fork failed");
+        close(pipefd[0]);
+        close(pipefd[1]);
+        free(exec_path1);
+        free(exec_path2);
+        free_pipeline(pipeline);
+        return;
+    }
+    
+    if (pid2 == 0) {
+        // Second child process
+        // Close write end of pipe
+        close(pipefd[1]);
+        
+        // Redirect stdin to read end of pipe
+        if (dup2(pipefd[0], STDIN_FILENO) == -1) {
+            perror("dup2 failed");
+            exit(1);
+        }
+        
+        // Close read end of pipe
+        close(pipefd[0]);
+        
+        // Execute second command
+        execv(exec_path2, pipeline->args2);
+        fprintf(stderr, "execv failed for %s: %s\n", exec_path2, strerror(errno));
+        exit(1);
+    }
+    
+    // Parent process
+    // Close both ends of pipe
+    close(pipefd[0]);
+    close(pipefd[1]);
+    
+    // Wait for both children to complete
+    int status1, status2;
+    waitpid(pid1, &status1, 0);
+    waitpid(pid2, &status2, 0);
+    
+    // Free resources
+    free(exec_path1);
+    free(exec_path2);
+    free_pipeline(pipeline);
+}
+
 void execute_command(char *input) {
+    // Check for pipeline
+    Pipeline *pipeline = parse_pipeline(input);
+    if (pipeline) {
+        execute_pipeline(pipeline);
+        return;
+    }
+    
+    // If not a pipeline, continue with normal command execution
     // Make a copy of the input string because parse_redirection will modify it
     char *input_copy = strdup(input);
     if (!input_copy) {
