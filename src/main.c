@@ -50,10 +50,47 @@ char* find_executable(const char *cmd) {
 
 void handle_echo(char *input) {
     // Skip "echo " part (5 characters)
-    char *args = input + 5;
+    char *str = input + 5;
+    int first_arg = 1;
+    int last_was_quoted = 0;  // Track if last argument was quoted
     
-    // Print the rest of the input (arguments)
-    printf("%s\n", args);
+    while (*str) {
+        // Skip leading spaces
+        while (*str == ' ') str++;
+        if (*str == '\0') break;
+        
+        // Check if this is an adjacent quoted string
+        int is_adjacent = last_was_quoted && str > input + 5 && *(str - 1) == '\'';
+        
+        // Print space between arguments, but not between adjacent quoted strings
+        if (!first_arg && !is_adjacent) {
+            printf(" ");
+        }
+        first_arg = 0;
+        
+        // Handle quoted argument
+        if (*str == '\'') {
+            str++; // Skip opening quote
+            last_was_quoted = 1;  // Mark this as a quoted argument
+            
+            while (*str != '\0' && *str != '\'') {
+                printf("%c", *str++);
+            }
+            if (*str == '\'') {
+                str++; // Skip closing quote
+            } else {
+                fprintf(stderr, "Error: Unmatched single quote\n");
+                return;
+            }
+        } else {
+            // Handle unquoted argument
+            last_was_quoted = 0;  // Mark this as an unquoted argument
+            while (*str != '\0' && *str != ' ') {
+                printf("%c", *str++);
+            }
+        }
+    }
+    printf("\n");
 }
 
 void handle_type(char *input) {
@@ -131,12 +168,57 @@ void handle_cd(char *input) {
 void execute_command(char *input) {
     char *args[MAX_ARGS];
     int arg_count = 0;
+    char *str = input;
     
-    // Split input into arguments
-    char *token = strtok(input, " ");
-    while (token != NULL && arg_count < MAX_ARGS - 1) {
-        args[arg_count++] = token;
-        token = strtok(NULL, " ");
+    // Parse arguments respecting quotes
+    while (arg_count < MAX_ARGS - 1) {
+        // Skip leading spaces
+        while (*str == ' ') str++;
+        if (*str == '\0') break;
+        
+        // Allocate space for this argument
+        args[arg_count] = malloc(MAX_ARG_LENGTH);
+        if (args[arg_count] == NULL) {
+            perror("malloc failed");
+            // Free previously allocated args
+            for (int i = 0; i < arg_count; i++) {
+                free(args[i]);
+            }
+            return;
+        }
+        
+        int i = 0;
+        // Handle quoted argument
+        if (*str == '\'') {
+            str++; // Skip opening quote
+            while (*str != '\0' && *str != '\'' && i < MAX_ARG_LENGTH - 1) {
+                args[arg_count][i++] = *str++;
+            }
+            if (*str == '\'') {
+                str++; // Skip closing quote
+            } else {
+                fprintf(stderr, "Error: Unmatched single quote\n");
+                free(args[arg_count]);
+                // Free previously allocated args
+                for (int i = 0; i < arg_count; i++) {
+                    free(args[i]);
+                }
+                return;
+            }
+        } else {
+            // Handle unquoted argument
+            while (*str != '\0' && *str != ' ' && i < MAX_ARG_LENGTH - 1) {
+                args[arg_count][i++] = *str++;
+            }
+        }
+        args[arg_count][i] = '\0';
+        
+        // Only add non-empty arguments
+        if (i > 0) {
+            arg_count++;
+        } else {
+            free(args[arg_count]);
+        }
     }
     args[arg_count] = NULL;  // NULL terminate the argument list
     
@@ -146,6 +228,10 @@ void execute_command(char *input) {
     char *exec_path = find_executable(args[0]);
     if (!exec_path) {
         printf("%s: command not found\n", args[0]);
+        // Free allocated arguments
+        for (int i = 0; i < arg_count; i++) {
+            free(args[i]);
+        }
         return;
     }
     
@@ -154,6 +240,10 @@ void execute_command(char *input) {
     if (pid < 0) {
         perror("fork failed");
         free(exec_path);
+        // Free allocated arguments
+        for (int i = 0; i < arg_count; i++) {
+            free(args[i]);
+        }
         return;
     }
     
@@ -163,10 +253,18 @@ void execute_command(char *input) {
         // If execv returns, it failed
         perror("execv failed");
         free(exec_path);
+        // Free allocated arguments
+        for (int i = 0; i < arg_count; i++) {
+            free(args[i]);
+        }
         exit(1);
     } else {
         // Parent process
         free(exec_path);
+        // Free allocated arguments
+        for (int i = 0; i < arg_count; i++) {
+            free(args[i]);
+        }
         int status;
         waitpid(pid, &status, 0);
     }
@@ -223,3 +321,4 @@ int main(int argc, char *argv[]) {
   
   return 0;
 }
+
