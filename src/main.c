@@ -1,9 +1,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #define MAX_ARGS 10
 #define MAX_ARG_LENGTH 100
+#define MAX_PATH_LENGTH 1024
 
 // List of builtin commands
 const char *builtins[] = {"echo", "exit", "type"};
@@ -18,6 +20,32 @@ int is_builtin(const char *cmd) {
     return 0;
 }
 
+char* find_executable(const char *cmd) {
+    char *path = getenv("PATH");
+    if (!path) return NULL;
+
+    // Make a copy of PATH since strtok modifies its argument
+    char path_copy[MAX_PATH_LENGTH];
+    strncpy(path_copy, path, MAX_PATH_LENGTH - 1);
+    path_copy[MAX_PATH_LENGTH - 1] = '\0';
+
+    // Split PATH into directories
+    char *dir = strtok(path_copy, ":");
+    while (dir != NULL) {
+        char full_path[MAX_PATH_LENGTH];
+        snprintf(full_path, MAX_PATH_LENGTH, "%s/%s", dir, cmd);
+        
+        // Check if file exists and is executable
+        if (access(full_path, X_OK) == 0) {
+            return strdup(full_path);
+        }
+        
+        dir = strtok(NULL, ":");
+    }
+    
+    return NULL;
+}
+
 void handle_echo(char *input) {
     // Skip "echo " part (5 characters)
     char *args = input + 5;
@@ -30,11 +58,22 @@ void handle_type(char *input) {
     // Skip "type " part (5 characters)
     char *cmd = input + 5;
     
+    // First check if it's a builtin
     if (is_builtin(cmd)) {
         printf("%s is a shell builtin\n", cmd);
-    } else {
-        printf("%s: not found\n", cmd);
+        return;
     }
+    
+    // Then check if it's an executable in PATH
+    char *exec_path = find_executable(cmd);
+    if (exec_path) {
+        printf("%s is %s\n", cmd, exec_path);
+        free(exec_path);
+        return;
+    }
+    
+    // If not found anywhere
+    printf("%s: not found\n", cmd);
 }
 
 int main(int argc, char *argv[]) {
