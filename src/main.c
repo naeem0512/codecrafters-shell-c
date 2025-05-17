@@ -5,12 +5,36 @@
 #define MAX_ARGS 10
 #define MAX_ARG_LENGTH 100
 
+// List of builtin commands
+const char *builtins[] = {"echo", "exit", "type"};
+const int num_builtins = 3;
+
+int is_builtin(const char *cmd) {
+    for (int i = 0; i < num_builtins; i++) {
+        if (strcmp(cmd, builtins[i]) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 void handle_echo(char *input) {
     // Skip "echo " part (5 characters)
     char *args = input + 5;
     
     // Print the rest of the input (arguments)
     printf("%s\n", args);
+}
+
+void handle_type(char *input) {
+    // Skip "type " part (5 characters)
+    char *cmd = input + 5;
+    
+    if (is_builtin(cmd)) {
+        printf("%s is a shell builtin\n", cmd);
+    } else {
+        printf("%s: not found\n", cmd);
+    }
 }
 
 int main(int argc, char *argv[]) {
@@ -37,6 +61,12 @@ int main(int argc, char *argv[]) {
     // Check for echo command
     if (strncmp(input, "echo ", 5) == 0) {
       handle_echo(input);
+      continue;
+    }
+    
+    // Check for type command
+    if (strncmp(input, "type ", 5) == 0) {
+      handle_type(input);
       continue;
     }
     
