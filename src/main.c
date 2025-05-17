@@ -18,6 +18,11 @@ int main(int argc, char *argv[]) {
     // Remove newline character from input
     input[strcspn(input, "\n")] = 0;
     
+    // Check for exit command
+    if (strcmp(input, "exit 0") == 0) {
+      exit(0);
+    }
+    
     // Print error message for the command
     printf("%s: command not found\n", input);
   }
