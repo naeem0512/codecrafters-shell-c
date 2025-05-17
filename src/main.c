@@ -843,25 +843,44 @@ void free_pipeline(Pipeline *pipeline) {
     }
 }
 
+// Echo command without redirection handling - for pipeline use
+void pipeline_echo(char **args, int output_fd) {
+    // Redirect stdout to the pipe
+    int original_stdout = dup(STDOUT_FILENO);
+    if (original_stdout == -1) {
+        perror("dup failed");
+        return;
+    }
+    
+    if (dup2(output_fd, STDOUT_FILENO) == -1) {
+        perror("dup2 failed");
+        close(original_stdout);
+        return;
+    }
+    
+    // Start from args[1] to skip the command name
+    for (int i = 1; args[i] != NULL; i++) {
+        // Print space between arguments
+        if (i > 1) {
+            printf(" ");
+        }
+        
+        // Print the argument directly
+        printf("%s", args[i]);
+    }
+    printf("\n");
+    fflush(stdout);  // Make sure output is flushed to the pipe
+    
+    // Restore original stdout
+    if (dup2(original_stdout, STDOUT_FILENO) == -1) {
+        perror("dup2 failed");
+    }
+    close(original_stdout);
+}
+
 // Function to execute a pipeline
 void execute_pipeline(Pipeline *pipeline) {
     if (!pipeline || !pipeline->cmd1 || !pipeline->cmd2) {
-        return;
-    }
-    
-    // Find executables
-    char *exec_path1 = find_executable(pipeline->cmd1);
-    char *exec_path2 = find_executable(pipeline->cmd2);
-    
-    if (!exec_path1) {
-        fprintf(stderr, "%s: command not found\n", pipeline->cmd1);
-        free_pipeline(pipeline);
-        return;
-    }
-    if (!exec_path2) {
-        fprintf(stderr, "%s: command not found\n", pipeline->cmd2);
-        free(exec_path1);
-        free_pipeline(pipeline);
         return;
     }
     
@@ -869,101 +888,250 @@ void execute_pipeline(Pipeline *pipeline) {
     int pipefd[2];
     if (pipe(pipefd) == -1) {
         perror("pipe failed");
-        free(exec_path1);
-        free(exec_path2);
         free_pipeline(pipeline);
         return;
     }
     
-    // Fork first child
-    pid_t pid1 = fork();
-    if (pid1 < 0) {
-        perror("fork failed");
-        close(pipefd[0]);
-        close(pipefd[1]);
-        free(exec_path1);
-        free(exec_path2);
-        free_pipeline(pipeline);
-        return;
-    }
+    // Check if first command is built-in
+    int cmd1_is_builtin = is_builtin(pipeline->cmd1);
     
-    if (pid1 == 0) {
-        // First child process
-        // Close read end of pipe
-        close(pipefd[0]);
+    // First command - can be built-in or external
+    pid_t pid1;
+    if (cmd1_is_builtin) {
+        // Execute built-in first command directly
+        if (strcmp(pipeline->cmd1, "echo") == 0) {
+            pipeline_echo(pipeline->args1, pipefd[1]);
+        } else if (strcmp(pipeline->cmd1, "pwd") == 0) {
+            // Redirect stdout to pipe
+            int original_stdout = dup(STDOUT_FILENO);
+            if (dup2(pipefd[1], STDOUT_FILENO) != -1) {
+                handle_pwd();
+                dup2(original_stdout, STDOUT_FILENO);
+            }
+            close(original_stdout);
+        } else if (strcmp(pipeline->cmd1, "type") == 0) {
+            // Redirect stdout to pipe
+            int original_stdout = dup(STDOUT_FILENO);
+            if (dup2(pipefd[1], STDOUT_FILENO) != -1) {
+                if (pipeline->args1[1] != NULL) {
+                    if (is_builtin(pipeline->args1[1])) {
+                        printf("%s is a shell builtin\n", pipeline->args1[1]);
+                    } else {
+                        char *exec_path = find_executable(pipeline->args1[1]);
+                        if (exec_path) {
+                            printf("%s is %s\n", pipeline->args1[1], exec_path);
+                            free(exec_path);
+                        } else {
+                            printf("%s: not found\n", pipeline->args1[1]);
+                        }
+                    }
+                }
+                dup2(original_stdout, STDOUT_FILENO);
+            }
+            close(original_stdout);
+        }
+        close(pipefd[1]); // Close write end of pipe
         
-        // Redirect stdout to write end of pipe
-        if (dup2(pipefd[1], STDOUT_FILENO) == -1) {
-            perror("dup2 failed");
+        // Check if second command is built-in
+        if (is_builtin(pipeline->cmd2)) {
+            // Execute built-in second command
+            if (strcmp(pipeline->cmd2, "type") == 0) {
+                // Redirect stdin from pipe
+                int original_stdin = dup(STDIN_FILENO);
+                if (dup2(pipefd[0], STDIN_FILENO) != -1) {
+                    if (pipeline->args2[1] != NULL) {
+                        if (is_builtin(pipeline->args2[1])) {
+                            printf("%s is a shell builtin\n", pipeline->args2[1]);
+                        } else {
+                            char *exec_path = find_executable(pipeline->args2[1]);
+                            if (exec_path) {
+                                printf("%s is %s\n", pipeline->args2[1], exec_path);
+                                free(exec_path);
+                            } else {
+                                printf("%s: not found\n", pipeline->args2[1]);
+                            }
+                        }
+                    }
+                    dup2(original_stdin, STDIN_FILENO);
+                }
+                close(original_stdin);
+            }
+            close(pipefd[0]); // Close read end of pipe
+        } else {
+            // Fork for second command (external)
+            pid_t pid2 = fork();
+            if (pid2 < 0) {
+                perror("fork failed");
+                close(pipefd[0]);
+                free_pipeline(pipeline);
+                return;
+            }
+            
+            if (pid2 == 0) {
+                // Child process for second command
+                if (dup2(pipefd[0], STDIN_FILENO) == -1) {
+                    perror("dup2 failed");
+                    exit(1);
+                }
+                close(pipefd[0]);
+                
+                // Find and execute second command
+                char *exec_path = find_executable(pipeline->cmd2);
+                if (!exec_path) {
+                    fprintf(stderr, "%s: command not found\n", pipeline->cmd2);
+                    exit(1);
+                }
+                
+                execv(exec_path, pipeline->args2);
+                perror("execv failed");
+                free(exec_path);
+                exit(1);
+            }
+            
+            // Parent process
+            close(pipefd[0]);
+            
+            // Wait for second command to complete
+            waitpid(pid2, NULL, 0);
+        }
+    } else {
+        // Fork for first command (external)
+        pid1 = fork();
+        if (pid1 < 0) {
+            perror("fork failed");
+            close(pipefd[0]);
+            close(pipefd[1]);
+            free_pipeline(pipeline);
+            return;
+        }
+        
+        if (pid1 == 0) {
+            // Child process for first command
+            close(pipefd[0]);
+            if (dup2(pipefd[1], STDOUT_FILENO) == -1) {
+                perror("dup2 failed");
+                exit(1);
+            }
+            close(pipefd[1]);
+            
+            // Find and execute first command
+            char *exec_path = find_executable(pipeline->cmd1);
+            if (!exec_path) {
+                fprintf(stderr, "%s: command not found\n", pipeline->cmd1);
+                exit(1);
+            }
+            
+            execv(exec_path, pipeline->args1);
+            perror("execv failed");
+            free(exec_path);
             exit(1);
         }
         
-        // Close write end of pipe
+        // Parent process
         close(pipefd[1]);
         
-        // Execute first command
-        execv(exec_path1, pipeline->args1);
-        fprintf(stderr, "execv failed for %s: %s\n", exec_path1, strerror(errno));
-        exit(1);
-    }
-    
-    // Fork second child
-    pid_t pid2 = fork();
-    if (pid2 < 0) {
-        perror("fork failed");
-        close(pipefd[0]);
-        close(pipefd[1]);
-        free(exec_path1);
-        free(exec_path2);
-        free_pipeline(pipeline);
-        return;
-    }
-    
-    if (pid2 == 0) {
-        // Second child process
-        // Close write end of pipe
-        close(pipefd[1]);
-        
-        // Redirect stdin to read end of pipe
-        if (dup2(pipefd[0], STDIN_FILENO) == -1) {
-            perror("dup2 failed");
-            exit(1);
+        // Check if second command is built-in
+        if (is_builtin(pipeline->cmd2)) {
+            // Execute built-in second command
+            if (strcmp(pipeline->cmd2, "type") == 0) {
+                // Redirect stdin from pipe
+                int original_stdin = dup(STDIN_FILENO);
+                if (dup2(pipefd[0], STDIN_FILENO) != -1) {
+                    if (pipeline->args2[1] != NULL) {
+                        if (is_builtin(pipeline->args2[1])) {
+                            printf("%s is a shell builtin\n", pipeline->args2[1]);
+                        } else {
+                            char *exec_path = find_executable(pipeline->args2[1]);
+                            if (exec_path) {
+                                printf("%s is %s\n", pipeline->args2[1], exec_path);
+                                free(exec_path);
+                            } else {
+                                printf("%s: not found\n", pipeline->args2[1]);
+                            }
+                        }
+                    }
+                    dup2(original_stdin, STDIN_FILENO);
+                }
+                close(original_stdin);
+            }
+            close(pipefd[0]);
+            
+            // Wait for first command to complete
+            waitpid(pid1, NULL, 0);
+        } else {
+            // Fork for second command (external)
+            pid_t pid2 = fork();
+            if (pid2 < 0) {
+                perror("fork failed");
+                close(pipefd[0]);
+                free_pipeline(pipeline);
+                waitpid(pid1, NULL, 0);
+                return;
+            }
+            
+            if (pid2 == 0) {
+                // Child process for second command
+                if (dup2(pipefd[0], STDIN_FILENO) == -1) {
+                    perror("dup2 failed");
+                    exit(1);
+                }
+                close(pipefd[0]);
+                
+                // Find and execute second command
+                char *exec_path = find_executable(pipeline->cmd2);
+                if (!exec_path) {
+                    fprintf(stderr, "%s: command not found\n", pipeline->cmd2);
+                    exit(1);
+                }
+                
+                execv(exec_path, pipeline->args2);
+                perror("execv failed");
+                free(exec_path);
+                exit(1);
+            }
+            
+            // Parent process
+            close(pipefd[0]);
+            
+            // Wait for both commands to complete
+            waitpid(pid1, NULL, 0);
+            waitpid(pid2, NULL, 0);
         }
-        
-        // Close read end of pipe
-        close(pipefd[0]);
-        
-        // Execute second command
-        execv(exec_path2, pipeline->args2);
-        fprintf(stderr, "execv failed for %s: %s\n", exec_path2, strerror(errno));
-        exit(1);
     }
     
-    // Parent process
-    // Close both ends of pipe
-    close(pipefd[0]);
-    close(pipefd[1]);
-    
-    // Wait for both children to complete
-    int status1, status2;
-    waitpid(pid1, &status1, 0);
-    waitpid(pid2, &status2, 0);
-    
-    // Free resources
-    free(exec_path1);
-    free(exec_path2);
     free_pipeline(pipeline);
 }
 
 void execute_command(char *input) {
-    // Check for pipeline
+    // Check for pipeline first
     Pipeline *pipeline = parse_pipeline(input);
     if (pipeline) {
         execute_pipeline(pipeline);
         return;
     }
     
-    // If not a pipeline, continue with normal command execution
+    // If not a pipeline, check for built-in commands
+    if (strncmp(input, "echo ", 5) == 0) {
+        handle_echo(input);
+        return;
+    }
+    
+    if (strncmp(input, "type ", 5) == 0) {
+        handle_type(input);
+        return;
+    }
+    
+    if (strcmp(input, "pwd") == 0) {
+        handle_pwd();
+        return;
+    }
+    
+    if (strncmp(input, "cd ", 3) == 0) {
+        handle_cd(input);
+        return;
+    }
+    
+    // If not a built-in command, continue with normal command execution
     // Make a copy of the input string because parse_redirection will modify it
     char *input_copy = strdup(input);
     if (!input_copy) {
@@ -1260,35 +1428,7 @@ int main(int argc, char *argv[]) {
             exit(0);
         }
         
-        // Check for echo command
-        if (strncmp(input, "echo ", 5) == 0) {
-            handle_echo(input);
-            free(input);
-            continue;
-        }
-        
-        // Check for type command
-        if (strncmp(input, "type ", 5) == 0) {
-            handle_type(input);
-            free(input);
-            continue;
-        }
-        
-        // Check for pwd command
-        if (strcmp(input, "pwd") == 0) {
-            handle_pwd();
-            free(input);
-            continue;
-        }
-        
-        // Check for cd command
-        if (strncmp(input, "cd ", 3) == 0) {
-            handle_cd(input);
-            free(input);
-            continue;
-        }
-        
-        // Execute external command
+        // Execute command (handles both built-ins and pipelines)
         execute_command(input);
         
         // Free the input string
