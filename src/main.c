@@ -8,6 +8,7 @@
 #include <fcntl.h>
 #include <readline/readline.h>
 #include <readline/history.h>
+#include <dirent.h>
 
 #define MAX_ARGS 10
 #define MAX_ARG_LENGTH 100
@@ -24,27 +25,80 @@ typedef struct {
     int append;       // Whether to append (>>) or truncate (>)
 } Redirection;
 
-// Function to generate completions for builtin commands
+// Function to find executables in PATH that match a prefix
+char* find_executable_match(const char *prefix) {
+    char *path = getenv("PATH");
+    if (!path) return NULL;
+
+    // Make a copy of PATH since strtok modifies its argument
+    char path_copy[MAX_PATH_LENGTH];
+    strncpy(path_copy, path, MAX_PATH_LENGTH - 1);
+    path_copy[MAX_PATH_LENGTH - 1] = '\0';
+
+    // Split PATH into directories
+    char *dir = strtok(path_copy, ":");
+    while (dir != NULL) {
+        DIR *d = opendir(dir);
+        if (d) {
+            struct dirent *entry;
+            while ((entry = readdir(d)) != NULL) {
+                // Skip . and .. entries
+                if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+                    continue;
+                }
+
+                // Check if the entry starts with our prefix
+                if (strncmp(entry->d_name, prefix, strlen(prefix)) == 0) {
+                    // Construct full path
+                    char full_path[MAX_PATH_LENGTH];
+                    snprintf(full_path, MAX_PATH_LENGTH, "%s/%s", dir, entry->d_name);
+                    
+                    // Check if it's executable
+                    if (access(full_path, X_OK) == 0) {
+                        closedir(d);
+                        return strdup(entry->d_name);  // Return just the executable name
+                    }
+                }
+            }
+            closedir(d);
+        }
+        dir = strtok(NULL, ":");
+    }
+    
+    return NULL;
+}
+
+// Function to generate completions for commands
 char* command_generator(const char* text, int state) {
     static int list_index, len;
+    static char *external_match;
     const char *name;
     
     // If this is a new word to complete, initialize now
     if (!state) {
         list_index = 0;
         len = strlen(text);
+        external_match = NULL;
     }
     
-    // Return the next builtin command that matches
+    // First try builtin commands
     while (list_index < num_builtins) {
         name = builtins[list_index++];
         if (strncmp(name, text, len) == 0) {
-            // Allocate memory for the completion string with null terminator only
-            // Let readline handle adding the space automatically
             char *completion = malloc(strlen(name) + 1);
             if (completion) {
                 strcpy(completion, name);
                 return completion;
+            }
+        }
+    }
+    
+    // If no more builtins, try external executables
+    if (list_index >= num_builtins) {
+        if (!external_match) {
+            external_match = find_executable_match(text);
+            if (external_match) {
+                return external_match;
             }
         }
     }
