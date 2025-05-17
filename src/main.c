@@ -25,6 +25,13 @@ typedef struct {
     int append;       // Whether to append (>>) or truncate (>)
 } Redirection;
 
+// Structure to hold completion matches
+typedef struct {
+    char **matches;
+    int count;
+    int capacity;
+} CompletionMatches;
+
 // Function to find executables in PATH that match a prefix
 char* find_executable_match(const char *prefix) {
     char *path = getenv("PATH");
@@ -68,17 +75,114 @@ char* find_executable_match(const char *prefix) {
     return NULL;
 }
 
+// Function to find all executables in PATH that match a prefix
+CompletionMatches* find_all_executable_matches(const char *prefix) {
+    CompletionMatches *matches = malloc(sizeof(CompletionMatches));
+    if (!matches) return NULL;
+    
+    matches->matches = NULL;
+    matches->count = 0;
+    matches->capacity = 0;
+    
+    char *path = getenv("PATH");
+    if (!path) return matches;
+
+    // Make a copy of PATH since strtok modifies its argument
+    char path_copy[MAX_PATH_LENGTH];
+    strncpy(path_copy, path, MAX_PATH_LENGTH - 1);
+    path_copy[MAX_PATH_LENGTH - 1] = '\0';
+
+    // Split PATH into directories
+    char *dir = strtok(path_copy, ":");
+    while (dir != NULL) {
+        DIR *d = opendir(dir);
+        if (d) {
+            struct dirent *entry;
+            while ((entry = readdir(d)) != NULL) {
+                // Skip . and .. entries
+                if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+                    continue;
+                }
+
+                // Check if the entry starts with our prefix
+                if (strncmp(entry->d_name, prefix, strlen(prefix)) == 0) {
+                    // Construct full path
+                    char full_path[MAX_PATH_LENGTH];
+                    snprintf(full_path, MAX_PATH_LENGTH, "%s/%s", dir, entry->d_name);
+                    
+                    // Check if it's executable
+                    if (access(full_path, X_OK) == 0) {
+                        // Grow the matches array if needed
+                        if (matches->count >= matches->capacity) {
+                            int new_capacity = matches->capacity == 0 ? 4 : matches->capacity * 2;
+                            char **new_matches = realloc(matches->matches, new_capacity * sizeof(char*));
+                            if (!new_matches) {
+                                // Clean up on failure
+                                for (int i = 0; i < matches->count; i++) {
+                                    free(matches->matches[i]);
+                                }
+                                free(matches->matches);
+                                free(matches);
+                                closedir(d);
+                                return NULL;
+                            }
+                            matches->matches = new_matches;
+                            matches->capacity = new_capacity;
+                        }
+                        
+                        // Add the match
+                        matches->matches[matches->count] = strdup(entry->d_name);
+                        if (!matches->matches[matches->count]) {
+                            // Clean up on failure
+                            for (int i = 0; i < matches->count; i++) {
+                                free(matches->matches[i]);
+                            }
+                            free(matches->matches);
+                            free(matches);
+                            closedir(d);
+                            return NULL;
+                        }
+                        matches->count++;
+                    }
+                }
+            }
+            closedir(d);
+        }
+        dir = strtok(NULL, ":");
+    }
+    
+    return matches;
+}
+
+// Function to free completion matches
+void free_completion_matches(CompletionMatches *matches) {
+    if (matches) {
+        for (int i = 0; i < matches->count; i++) {
+            free(matches->matches[i]);
+        }
+        free(matches->matches);
+        free(matches);
+    }
+}
+
 // Function to generate completions for commands
 char* command_generator(const char* text, int state) {
     static int list_index, len;
-    static char *external_match;
+    static CompletionMatches *external_matches;
+    static int external_match_index;
     const char *name;
     
     // If this is a new word to complete, initialize now
     if (!state) {
         list_index = 0;
         len = strlen(text);
-        external_match = NULL;
+        external_match_index = 0;
+        
+        // Free any previous matches
+        if (external_matches) {
+            free_completion_matches(external_matches);
+            external_matches = NULL;
+        }
     }
     
     // First try builtin commands
@@ -95,11 +199,13 @@ char* command_generator(const char* text, int state) {
     
     // If no more builtins, try external executables
     if (list_index >= num_builtins) {
-        if (!external_match) {
-            external_match = find_executable_match(text);
-            if (external_match) {
-                return external_match;
-            }
+        if (!external_matches) {
+            external_matches = find_all_executable_matches(text);
+            if (!external_matches) return NULL;
+        }
+        
+        if (external_match_index < external_matches->count) {
+            return strdup(external_matches->matches[external_match_index++]);
         }
     }
     
@@ -112,6 +218,7 @@ char** command_completion(const char* text, int start, int end) {
     
     // Only complete at the start of the line
     if (start == 0) {
+        // Get all matches
         matches = rl_completion_matches(text, command_generator);
     }
     
