@@ -60,7 +60,8 @@ void handle_echo(char *input) {
         if (*str == '\0') break;
         
         // Check if this is an adjacent quoted string
-        int is_adjacent = last_was_quoted && str > input + 5 && *(str - 1) == '\'';
+        int is_adjacent = last_was_quoted && str > input + 5 && 
+                         ((*(str - 1) == '\'') || (*(str - 1) == '"'));
         
         // Print space between arguments, but not between adjacent quoted strings
         if (!first_arg && !is_adjacent) {
@@ -69,17 +70,34 @@ void handle_echo(char *input) {
         first_arg = 0;
         
         // Handle quoted argument
-        if (*str == '\'') {
+        if (*str == '\'' || *str == '"') {
+            char quote = *str;  // Remember which quote we're handling
             str++; // Skip opening quote
             last_was_quoted = 1;  // Mark this as a quoted argument
             
-            while (*str != '\0' && *str != '\'') {
-                printf("%c", *str++);
+            while (*str != '\0' && *str != quote) {
+                if (quote == '"' && *str == '\\') {
+                    // Handle backslash in double quotes
+                    str++; // Skip the backslash
+                    if (*str == '\0') {
+                        fprintf(stderr, "Error: Unmatched backslash\n");
+                        return;
+                    }
+                    // Only escape special characters in double quotes
+                    if (*str == '\\' || *str == '$' || *str == '"' || *str == '\n') {
+                        printf("%c", *str++);
+                    } else {
+                        // For other characters, print the backslash and the character
+                        printf("\\%c", *str++);
+                    }
+                } else {
+                    printf("%c", *str++);
+                }
             }
-            if (*str == '\'') {
+            if (*str == quote) {
                 str++; // Skip closing quote
             } else {
-                fprintf(stderr, "Error: Unmatched single quote\n");
+                fprintf(stderr, "Error: Unmatched %c\n", quote);
                 return;
             }
         } else {
@@ -189,15 +207,39 @@ void execute_command(char *input) {
         
         int i = 0;
         // Handle quoted argument
-        if (*str == '\'') {
+        if (*str == '\'' || *str == '"') {
+            char quote = *str;  // Remember which quote we're handling
             str++; // Skip opening quote
-            while (*str != '\0' && *str != '\'' && i < MAX_ARG_LENGTH - 1) {
-                args[arg_count][i++] = *str++;
+            
+            while (*str != '\0' && *str != quote && i < MAX_ARG_LENGTH - 1) {
+                if (quote == '"' && *str == '\\') {
+                    // Handle backslash in double quotes
+                    str++; // Skip the backslash
+                    if (*str == '\0') {
+                        fprintf(stderr, "Error: Unmatched backslash\n");
+                        free(args[arg_count]);
+                        // Free previously allocated args
+                        for (int i = 0; i < arg_count; i++) {
+                            free(args[i]);
+                        }
+                        return;
+                    }
+                    // Only escape special characters in double quotes
+                    if (*str == '\\' || *str == '$' || *str == '"' || *str == '\n') {
+                        args[arg_count][i++] = *str++;
+                    } else {
+                        // For other characters, keep the backslash and the character
+                        args[arg_count][i++] = '\\';
+                        args[arg_count][i++] = *str++;
+                    }
+                } else {
+                    args[arg_count][i++] = *str++;
+                }
             }
-            if (*str == '\'') {
+            if (*str == quote) {
                 str++; // Skip closing quote
             } else {
-                fprintf(stderr, "Error: Unmatched single quote\n");
+                fprintf(stderr, "Error: Unmatched %c\n", quote);
                 free(args[arg_count]);
                 // Free previously allocated args
                 for (int i = 0; i < arg_count; i++) {
