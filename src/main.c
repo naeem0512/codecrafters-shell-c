@@ -2,6 +2,17 @@
 #include <stdlib.h>
 #include <string.h>
 
+#define MAX_ARGS 10
+#define MAX_ARG_LENGTH 100
+
+void handle_echo(char *input) {
+    // Skip "echo " part (5 characters)
+    char *args = input + 5;
+    
+    // Print the rest of the input (arguments)
+    printf("%s\n", args);
+}
+
 int main(int argc, char *argv[]) {
   // Flush after every printf
   setbuf(stdout, NULL);
@@ -23,7 +34,13 @@ int main(int argc, char *argv[]) {
       exit(0);
     }
     
-    // Print error message for the command
+    // Check for echo command
+    if (strncmp(input, "echo ", 5) == 0) {
+      handle_echo(input);
+      continue;
+    }
+    
+    // Print error message for other commands
     printf("%s: command not found\n", input);
   }
   
