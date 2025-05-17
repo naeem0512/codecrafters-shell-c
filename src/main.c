@@ -100,6 +100,27 @@ void handle_cd(char *input) {
         return;
     }
     
+    char expanded_path[MAX_PATH_LENGTH];
+    
+    // Handle ~ character
+    if (*path == '~') {
+        char *home = getenv("HOME");
+        if (home == NULL) {
+            fprintf(stderr, "cd: HOME environment variable not set\n");
+            return;
+        }
+        
+        // If path is just ~, use home directory directly
+        if (*(path + 1) == '\0') {
+            strncpy(expanded_path, home, MAX_PATH_LENGTH - 1);
+            expanded_path[MAX_PATH_LENGTH - 1] = '\0';
+        } else {
+            // If path is ~/something, concatenate home and the rest of the path
+            snprintf(expanded_path, MAX_PATH_LENGTH, "%s%s", home, path + 1);
+        }
+        path = expanded_path;
+    }
+    
     // Try to change directory
     if (chdir(path) != 0) {
         // Get the error message
