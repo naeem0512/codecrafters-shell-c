@@ -104,7 +104,22 @@ void handle_echo(char *input) {
             // Handle unquoted argument
             last_was_quoted = 0;  // Mark this as an unquoted argument
             while (*str != '\0' && *str != ' ') {
-                printf("%c", *str++);
+                if (*str == '\\') {
+                    str++; // Skip the backslash
+                    if (*str == '\0') {
+                        fprintf(stderr, "Error: Unmatched backslash\n");
+                        return;
+                    }
+                    if (*str == '\n') {
+                        // Handle line continuation
+                        str++; // Skip the newline
+                    } else {
+                        // Preserve the literal value of the next character
+                        printf("%c", *str++);
+                    }
+                } else {
+                    printf("%c", *str++);
+                }
             }
         }
     }
@@ -188,7 +203,7 @@ void execute_command(char *input) {
     int arg_count = 0;
     char *str = input;
     
-    // Parse arguments respecting quotes
+    // Parse arguments respecting quotes and escapes
     while (arg_count < MAX_ARGS - 1) {
         // Skip leading spaces
         while (*str == ' ') str++;
@@ -250,7 +265,27 @@ void execute_command(char *input) {
         } else {
             // Handle unquoted argument
             while (*str != '\0' && *str != ' ' && i < MAX_ARG_LENGTH - 1) {
-                args[arg_count][i++] = *str++;
+                if (*str == '\\') {
+                    str++; // Skip the backslash
+                    if (*str == '\0') {
+                        fprintf(stderr, "Error: Unmatched backslash\n");
+                        free(args[arg_count]);
+                        // Free previously allocated args
+                        for (int i = 0; i < arg_count; i++) {
+                            free(args[i]);
+                        }
+                        return;
+                    }
+                    if (*str == '\n') {
+                        // Handle line continuation
+                        str++; // Skip the newline
+                    } else {
+                        // Preserve the literal value of the next character
+                        args[arg_count][i++] = *str++;
+                    }
+                } else {
+                    args[arg_count][i++] = *str++;
+                }
             }
         }
         args[arg_count][i] = '\0';
