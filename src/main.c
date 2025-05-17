@@ -3,7 +3,9 @@
 #include <string.h>
 #include <unistd.h>
 #include <sys/wait.h>
+#include <sys/stat.h>  // For mkdir
 #include <errno.h>
+#include <fcntl.h>
 
 #define MAX_ARGS 10
 #define MAX_ARG_LENGTH 100
@@ -12,6 +14,13 @@
 // List of builtin commands
 const char *builtins[] = {"echo", "exit", "type", "pwd", "cd"};
 const int num_builtins = 5;
+
+// Structure to hold redirection information
+typedef struct {
+    int fd;           // File descriptor to redirect (1 for stdout)
+    char *filename;   // Target filename
+    int append;       // Whether to append (>>) or truncate (>)
+} Redirection;
 
 int is_builtin(const char *cmd) {
     for (int i = 0; i < num_builtins; i++) {
@@ -48,7 +57,135 @@ char* find_executable(const char *cmd) {
     return NULL;
 }
 
+// Parse redirection operators from command
+Redirection* parse_redirection(char **input) {
+    char *str = *input;
+    Redirection *redir = NULL;
+    char *redirection_start = NULL;
+    int redirection_length = 0;
+    
+    // Look for redirection operators
+    char *redirect_pos = NULL;
+    char *current = str;
+    while (*current != '\0') {
+        if (*current == '>') {
+            redirect_pos = current;
+            break;
+        }
+        current++;
+    }
+    
+    if (redirect_pos != NULL) {
+        // Found a redirection operator
+        redirection_start = redirect_pos;
+        
+        redir = malloc(sizeof(Redirection));
+        if (!redir) {
+            perror("malloc failed");
+            return NULL;
+        }
+        
+        // Check for file descriptor
+        if (redirect_pos > str && *(redirect_pos - 1) >= '0' && *(redirect_pos - 1) <= '9') {
+            redir->fd = *(redirect_pos - 1) - '0';
+            // Remove the file descriptor from input
+            *(redirect_pos - 1) = ' ';
+        } else {
+            redir->fd = 1;  // Default to stdout
+        }
+        
+        // Check for append operator
+        if (*(redirect_pos + 1) == '>') {
+            redir->append = 1;
+            redirect_pos += 2;
+        } else {
+            redir->append = 0;
+            redirect_pos++;
+        }
+        
+        // Skip spaces after operator
+        while (*redirect_pos == ' ') redirect_pos++;
+        
+        // Get filename
+        char *filename_start = redirect_pos;
+        while (*redirect_pos != '\0' && *redirect_pos != ' ') redirect_pos++;
+        int filename_len = redirect_pos - filename_start;
+        
+        redir->filename = malloc(filename_len + 1);
+        if (!redir->filename) {
+            perror("malloc failed");
+            free(redir);
+            return NULL;
+        }
+        strncpy(redir->filename, filename_start, filename_len);
+        redir->filename[filename_len] = '\0';
+        
+        // Calculate the length of the redirection part
+        redirection_length = redirect_pos - redirection_start;
+        
+        // Create a new string with redirection part removed
+        int new_length = strlen(str) - redirection_length;
+        char *new_str = malloc(new_length + 1);
+        if (!new_str) {
+            perror("malloc failed");
+            free(redir->filename);
+            free(redir);
+            return NULL;
+        }
+        
+        // Copy part before redirection
+        strncpy(new_str, str, redirection_start - str);
+        
+        // Add a null terminator at the end of the command part
+        new_str[redirection_start - str] = '\0';
+        
+        // Replace the original string with the new one
+        *input = new_str;
+    }
+    
+    return redir;
+}
+
 void handle_echo(char *input) {
+    // Parse redirection if any
+    Redirection *redir = parse_redirection(&input);
+    int original_stdout = -1;
+    int output_fd = -1;
+    
+    if (redir) {
+        // Save original stdout
+        original_stdout = dup(STDOUT_FILENO);
+        if (original_stdout == -1) {
+            perror("dup failed");
+            free(redir->filename);
+            free(redir);
+            return;
+        }
+        
+        // Open output file
+        int flags = O_WRONLY | O_CREAT;
+        flags |= redir->append ? O_APPEND : O_TRUNC;
+        output_fd = open(redir->filename, flags, 0644);
+        if (output_fd == -1) {
+            perror("open failed");
+            close(original_stdout);
+            free(redir->filename);
+            free(redir);
+            return;
+        }
+        
+        // Redirect stdout
+        if (dup2(output_fd, STDOUT_FILENO) == -1) {
+            perror("dup2 failed");
+            close(original_stdout);
+            close(output_fd);
+            free(redir->filename);
+            free(redir);
+            return;
+        }
+        close(output_fd);
+    }
+    
     // Skip "echo " part (5 characters)
     char *str = input + 5;
     int first_arg = 1;
@@ -124,6 +261,16 @@ void handle_echo(char *input) {
         }
     }
     printf("\n");
+    
+    // Restore stdout if redirected
+    if (redir) {
+        if (dup2(original_stdout, STDOUT_FILENO) == -1) {
+            perror("dup2 failed");
+        }
+        close(original_stdout);
+        free(redir->filename);
+        free(redir);
+    }
 }
 
 void handle_type(char *input) {
@@ -199,9 +346,19 @@ void handle_cd(char *input) {
 }
 
 void execute_command(char *input) {
+    // Make a copy of the input string because parse_redirection will modify it
+    char *input_copy = strdup(input);
+    if (!input_copy) {
+        perror("strdup failed");
+        return;
+    }
+    
+    // Parse redirection if any
+    Redirection *redir = parse_redirection(&input_copy);
+    
     char *args[MAX_ARGS];
     int arg_count = 0;
-    char *str = input;
+    char *str = input_copy;
     
     // Parse arguments respecting quotes and escapes
     while (arg_count < MAX_ARGS - 1) {
@@ -217,6 +374,11 @@ void execute_command(char *input) {
             for (int i = 0; i < arg_count; i++) {
                 free(args[i]);
             }
+            if (redir) {
+                free(redir->filename);
+                free(redir);
+            }
+            free(input_copy);
             return;
         }
         
@@ -237,6 +399,11 @@ void execute_command(char *input) {
                         for (int i = 0; i < arg_count; i++) {
                             free(args[i]);
                         }
+                        if (redir) {
+                            free(redir->filename);
+                            free(redir);
+                        }
+                        free(input_copy);
                         return;
                     }
                     // Only escape special characters in double quotes
@@ -260,6 +427,11 @@ void execute_command(char *input) {
                 for (int i = 0; i < arg_count; i++) {
                     free(args[i]);
                 }
+                if (redir) {
+                    free(redir->filename);
+                    free(redir);
+                }
+                free(input_copy);
                 return;
             }
         } else {
@@ -274,6 +446,11 @@ void execute_command(char *input) {
                         for (int i = 0; i < arg_count; i++) {
                             free(args[i]);
                         }
+                        if (redir) {
+                            free(redir->filename);
+                            free(redir);
+                        }
+                        free(input_copy);
                         return;
                     }
                     if (*str == '\n') {
@@ -299,7 +476,14 @@ void execute_command(char *input) {
     }
     args[arg_count] = NULL;  // NULL terminate the argument list
     
-    if (arg_count == 0) return;  // Empty command
+    if (arg_count == 0) {
+        if (redir) {
+            free(redir->filename);
+            free(redir);
+        }
+        free(input_copy);
+        return;  // Empty command
+    }
     
     // Find the executable
     char *exec_path = find_executable(args[0]);
@@ -309,6 +493,11 @@ void execute_command(char *input) {
         for (int i = 0; i < arg_count; i++) {
             free(args[i]);
         }
+        if (redir) {
+            free(redir->filename);
+            free(redir);
+        }
+        free(input_copy);
         return;
     }
     
@@ -321,29 +510,87 @@ void execute_command(char *input) {
         for (int i = 0; i < arg_count; i++) {
             free(args[i]);
         }
+        if (redir) {
+            free(redir->filename);
+            free(redir);
+        }
+        free(input_copy);
         return;
     }
     
     if (pid == 0) {
         // Child process
-        execv(exec_path, args);
-        // If execv returns, it failed
-        perror("execv failed");
-        free(exec_path);
-        // Free allocated arguments
-        for (int i = 0; i < arg_count; i++) {
-            free(args[i]);
+        if (redir) {
+            // Create parent directories if they don't exist
+            char *last_slash = strrchr(redir->filename, '/');
+            if (last_slash != NULL) {
+                char dir_path[MAX_PATH_LENGTH];
+                strncpy(dir_path, redir->filename, last_slash - redir->filename);
+                dir_path[last_slash - redir->filename] = '\0';
+                
+                if (strlen(dir_path) > 0) {
+                    // Create directory recursively (like mkdir -p)
+                    char *p = dir_path;
+                    while (*p != '\0') {
+                        if (*p == '/') {
+                            *p = '\0';  // Temporarily terminate string
+                            if (strlen(dir_path) > 0) {
+                                if (mkdir(dir_path, 0777) == -1 && errno != EEXIST) {
+                                    fprintf(stderr, "mkdir failed for %s: %s\n", dir_path, strerror(errno));
+                                }
+                            }
+                            *p = '/';  // Restore slash
+                        }
+                        p++;
+                    }
+                    // Create the final directory level
+                    if (mkdir(dir_path, 0777) == -1 && errno != EEXIST) {
+                        fprintf(stderr, "mkdir failed for %s: %s\n", dir_path, strerror(errno));
+                    }
+                }
+            }
+            
+            // Open output file with full permissions
+            int flags = O_WRONLY | O_CREAT;
+            flags |= redir->append ? O_APPEND : O_TRUNC;
+            int output_fd = open(redir->filename, flags, 0666);
+            if (output_fd == -1) {
+                fprintf(stderr, "open failed for %s: %s\n", redir->filename, strerror(errno));
+                exit(1);
+            }
+            
+            // Redirect stdout to the file
+            if (dup2(output_fd, redir->fd) == -1) {
+                fprintf(stderr, "dup2 failed: %s\n", strerror(errno));
+                close(output_fd);
+                exit(1);
+            }
+            close(output_fd);
         }
+        
+        // Execute the command
+        execv(exec_path, args);
+        
+        // If execv returns, it failed
+        fprintf(stderr, "execv failed for %s: %s\n", exec_path, strerror(errno));
         exit(1);
     } else {
         // Parent process
+        // Wait for child to complete
+        int status;
+        waitpid(pid, &status, 0);
+        
+        // Free resources in parent
         free(exec_path);
         // Free allocated arguments
         for (int i = 0; i < arg_count; i++) {
             free(args[i]);
         }
-        int status;
-        waitpid(pid, &status, 0);
+        if (redir) {
+            free(redir->filename);
+            free(redir);
+        }
+        free(input_copy);
     }
 }
 
