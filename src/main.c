@@ -34,12 +34,10 @@ typedef struct {
 
 // Structure to hold pipeline components
 typedef struct {
-    char *cmd1;        // First command
-    char *cmd2;        // Second command
-    char *args1[MAX_ARGS];  // Arguments for first command
-    char *args2[MAX_ARGS];  // Arguments for second command
-    int arg_count1;    // Number of arguments for first command
-    int arg_count2;    // Number of arguments for second command
+    char **commands;        // Array of commands
+    char ***args;           // Array of argument arrays
+    int *arg_counts;        // Array of argument counts
+    int num_commands;       // Number of commands in pipeline
 } Pipeline;
 
 // Function to find executables in PATH that match a prefix
@@ -641,224 +639,212 @@ Pipeline* parse_pipeline(char *input) {
     }
     
     // Initialize pipeline structure
-    pipeline->cmd1 = NULL;
-    pipeline->cmd2 = NULL;
-    pipeline->arg_count1 = 0;
-    pipeline->arg_count2 = 0;
-    memset(pipeline->args1, 0, sizeof(pipeline->args1));
-    memset(pipeline->args2, 0, sizeof(pipeline->args2));
+    pipeline->commands = NULL;
+    pipeline->args = NULL;
+    pipeline->arg_counts = NULL;
+    pipeline->num_commands = 0;
     
-    // Find the pipe operator
-    char *pipe_pos = strchr(input, '|');
-    if (!pipe_pos) {
-        free(pipeline);
-        return NULL;  // Not a pipeline
+    // Count number of commands (number of pipes + 1)
+    int num_pipes = 0;
+    char *p = input;
+    int in_quotes = 0;
+    char quote_char = 0;
+    
+    // Count pipes, but ignore those inside quotes
+    while (*p) {
+        if (*p == '\'' || *p == '"') {
+            if (!in_quotes) {
+                in_quotes = 1;
+                quote_char = *p;
+            } else if (*p == quote_char) {
+                in_quotes = 0;
+            }
+        } else if (*p == '|' && !in_quotes) {
+            num_pipes++;
+        }
+        p++;
     }
     
-    // Split the input at the pipe
-    *pipe_pos = '\0';  // Terminate first command
-    char *cmd2_start = pipe_pos + 1;
+    int num_commands = num_pipes + 1;
     
-    // Skip spaces after pipe
-    while (*cmd2_start == ' ') cmd2_start++;
+    // Allocate arrays
+    pipeline->commands = malloc(num_commands * sizeof(char*));
+    pipeline->args = malloc(num_commands * sizeof(char**));
+    pipeline->arg_counts = malloc(num_commands * sizeof(int));
     
-    // Parse first command and its arguments
-    char *str = input;
-    while (pipeline->arg_count1 < MAX_ARGS - 1) {
-        // Skip leading spaces
-        while (*str == ' ') str++;
-        if (*str == '\0') break;
-        
-        // Allocate space for this argument
-        pipeline->args1[pipeline->arg_count1] = malloc(MAX_ARG_LENGTH);
-        if (!pipeline->args1[pipeline->arg_count1]) {
+    if (!pipeline->commands || !pipeline->args || !pipeline->arg_counts) {
+        perror("malloc failed");
+        goto cleanup;
+    }
+    
+    // Initialize arrays
+    for (int i = 0; i < num_commands; i++) {
+        pipeline->commands[i] = NULL;
+        pipeline->args[i] = malloc(MAX_ARGS * sizeof(char*));
+        if (!pipeline->args[i]) {
             perror("malloc failed");
             goto cleanup;
         }
+        pipeline->arg_counts[i] = 0;
+    }
+    
+    // Split input into commands
+    char *cmd_start = input;
+    for (int i = 0; i < num_commands; i++) {
+        // Find end of this command, respecting quotes
+        char *cmd_end = cmd_start;
+        in_quotes = 0;
+        quote_char = 0;
         
-        int i = 0;
-        // Handle quoted argument
-        if (*str == '\'' || *str == '"') {
-            char quote = *str;
-            str++; // Skip opening quote
-            
-            while (*str != '\0' && *str != quote && i < MAX_ARG_LENGTH - 1) {
-                if (quote == '"' && *str == '\\') {
-                    str++; // Skip backslash
-                    if (*str == '\0') {
-                        fprintf(stderr, "Error: Unmatched backslash\n");
-                        goto cleanup;
-                    }
-                    if (*str == '\\' || *str == '$' || *str == '"' || *str == '\n') {
-                        pipeline->args1[pipeline->arg_count1][i++] = *str++;
-                    } else {
-                        pipeline->args1[pipeline->arg_count1][i++] = '\\';
-                        pipeline->args1[pipeline->arg_count1][i++] = *str++;
-                    }
-                } else {
-                    pipeline->args1[pipeline->arg_count1][i++] = *str++;
+        while (*cmd_end) {
+            if (*cmd_end == '\'' || *cmd_end == '"') {
+                if (!in_quotes) {
+                    in_quotes = 1;
+                    quote_char = *cmd_end;
+                } else if (*cmd_end == quote_char) {
+                    in_quotes = 0;
                 }
+            } else if (*cmd_end == '|' && !in_quotes) {
+                break;
             }
-            if (*str == quote) {
-                str++; // Skip closing quote
-            } else {
-                fprintf(stderr, "Error: Unmatched %c\n", quote);
+            cmd_end++;
+        }
+        
+        if (*cmd_end == '|') {
+            *cmd_end = '\0';  // Temporarily terminate string
+        }
+        
+        // Parse this command and its arguments
+        char *str = cmd_start;
+        while (pipeline->arg_counts[i] < MAX_ARGS - 1) {
+            // Skip leading spaces
+            while (*str == ' ') str++;
+            if (*str == '\0') break;
+            
+            // Allocate space for this argument
+            pipeline->args[i][pipeline->arg_counts[i]] = malloc(MAX_ARG_LENGTH);
+            if (!pipeline->args[i][pipeline->arg_counts[i]]) {
+                perror("malloc failed");
                 goto cleanup;
             }
-        } else {
-            // Handle unquoted argument
-            while (*str != '\0' && *str != ' ' && i < MAX_ARG_LENGTH - 1) {
-                if (*str == '\\') {
-                    str++; // Skip backslash
-                    if (*str == '\0') {
-                        fprintf(stderr, "Error: Unmatched backslash\n");
-                        goto cleanup;
-                    }
-                    if (*str == '\n') {
-                        str++; // Skip newline
-                    } else {
-                        pipeline->args1[pipeline->arg_count1][i++] = *str++;
-                    }
-                } else {
-                    pipeline->args1[pipeline->arg_count1][i++] = *str++;
-                }
-            }
-        }
-        pipeline->args1[pipeline->arg_count1][i] = '\0';
-        
-        if (i > 0) {
-            pipeline->arg_count1++;
-        } else {
-            free(pipeline->args1[pipeline->arg_count1]);
-        }
-    }
-    pipeline->args1[pipeline->arg_count1] = NULL;
-    
-    // Parse second command and its arguments
-    str = cmd2_start;
-    while (pipeline->arg_count2 < MAX_ARGS - 1) {
-        // Skip leading spaces
-        while (*str == ' ') str++;
-        if (*str == '\0') break;
-        
-        // Allocate space for this argument
-        pipeline->args2[pipeline->arg_count2] = malloc(MAX_ARG_LENGTH);
-        if (!pipeline->args2[pipeline->arg_count2]) {
-            perror("malloc failed");
-            goto cleanup;
-        }
-        
-        int i = 0;
-        // Handle quoted argument
-        if (*str == '\'' || *str == '"') {
-            char quote = *str;
-            str++; // Skip opening quote
             
-            while (*str != '\0' && *str != quote && i < MAX_ARG_LENGTH - 1) {
-                if (quote == '"' && *str == '\\') {
-                    str++; // Skip backslash
-                    if (*str == '\0') {
-                        fprintf(stderr, "Error: Unmatched backslash\n");
-                        goto cleanup;
-                    }
-                    if (*str == '\\' || *str == '$' || *str == '"' || *str == '\n') {
-                        pipeline->args2[pipeline->arg_count2][i++] = *str++;
+            int j = 0;
+            // Handle quoted argument
+            if (*str == '\'' || *str == '"') {
+                char quote = *str;
+                str++; // Skip opening quote
+                
+                while (*str != '\0' && *str != quote && j < MAX_ARG_LENGTH - 1) {
+                    if (quote == '"' && *str == '\\') {
+                        str++; // Skip backslash
+                        if (*str == '\0') {
+                            fprintf(stderr, "Error: Unmatched backslash\n");
+                            goto cleanup;
+                        }
+                        if (*str == '\\' || *str == '$' || *str == '"' || *str == '\n') {
+                            pipeline->args[i][pipeline->arg_counts[i]][j++] = *str++;
+                        } else {
+                            pipeline->args[i][pipeline->arg_counts[i]][j++] = '\\';
+                            pipeline->args[i][pipeline->arg_counts[i]][j++] = *str++;
+                        }
                     } else {
-                        pipeline->args2[pipeline->arg_count2][i++] = '\\';
-                        pipeline->args2[pipeline->arg_count2][i++] = *str++;
+                        pipeline->args[i][pipeline->arg_counts[i]][j++] = *str++;
                     }
-                } else {
-                    pipeline->args2[pipeline->arg_count2][i++] = *str++;
                 }
-            }
-            if (*str == quote) {
-                str++; // Skip closing quote
+                if (*str == quote) {
+                    str++; // Skip closing quote
+                } else {
+                    fprintf(stderr, "Error: Unmatched %c\n", quote);
+                    goto cleanup;
+                }
             } else {
-                fprintf(stderr, "Error: Unmatched %c\n", quote);
-                goto cleanup;
-            }
-        } else {
-            // Handle unquoted argument
-            while (*str != '\0' && *str != ' ' && i < MAX_ARG_LENGTH - 1) {
-                if (*str == '\\') {
-                    str++; // Skip backslash
-                    if (*str == '\0') {
-                        fprintf(stderr, "Error: Unmatched backslash\n");
-                        goto cleanup;
-                    }
-                    if (*str == '\n') {
-                        str++; // Skip newline
+                // Handle unquoted argument
+                while (*str != '\0' && *str != ' ' && j < MAX_ARG_LENGTH - 1) {
+                    if (*str == '\\') {
+                        str++; // Skip backslash
+                        if (*str == '\0') {
+                            fprintf(stderr, "Error: Unmatched backslash\n");
+                            goto cleanup;
+                        }
+                        if (*str == '\n') {
+                            str++; // Skip newline
+                        } else {
+                            pipeline->args[i][pipeline->arg_counts[i]][j++] = *str++;
+                        }
                     } else {
-                        pipeline->args2[pipeline->arg_count2][i++] = *str++;
+                        pipeline->args[i][pipeline->arg_counts[i]][j++] = *str++;
                     }
-                } else {
-                    pipeline->args2[pipeline->arg_count2][i++] = *str++;
                 }
             }
+            pipeline->args[i][pipeline->arg_counts[i]][j] = '\0';
+            
+            if (j > 0) {
+                pipeline->arg_counts[i]++;
+            } else {
+                free(pipeline->args[i][pipeline->arg_counts[i]]);
+            }
         }
-        pipeline->args2[pipeline->arg_count2][i] = '\0';
+        pipeline->args[i][pipeline->arg_counts[i]] = NULL;
         
-        if (i > 0) {
-            pipeline->arg_count2++;
-        } else {
-            free(pipeline->args2[pipeline->arg_count2]);
+        // Set command name
+        if (pipeline->arg_counts[i] > 0) {
+            pipeline->commands[i] = strdup(pipeline->args[i][0]);
+        }
+        
+        // Move to next command
+        if (*cmd_end == '\0' && i < num_commands - 1) {
+            *cmd_end = '|';  // Restore pipe character
+            cmd_start = cmd_end + 1;
+            // Skip spaces after pipe
+            while (*cmd_start == ' ') cmd_start++;
         }
     }
-    pipeline->args2[pipeline->arg_count2] = NULL;
     
-    // Set command names
-    if (pipeline->arg_count1 > 0) {
-        pipeline->cmd1 = strdup(pipeline->args1[0]);
-    }
-    if (pipeline->arg_count2 > 0) {
-        pipeline->cmd2 = strdup(pipeline->args2[0]);
-    }
-    
+    pipeline->num_commands = num_commands;
     return pipeline;
     
 cleanup:
     // Free allocated memory on error
-    for (int i = 0; i < pipeline->arg_count1; i++) {
-        free(pipeline->args1[i]);
+    if (pipeline) {
+        for (int i = 0; i < num_commands; i++) {
+            if (pipeline->args && pipeline->args[i]) {
+                for (int j = 0; j < pipeline->arg_counts[i]; j++) {
+                    free(pipeline->args[i][j]);
+                }
+                free(pipeline->args[i]);
+            }
+            free(pipeline->commands[i]);
+        }
+        free(pipeline->commands);
+        free(pipeline->args);
+        free(pipeline->arg_counts);
+        free(pipeline);
     }
-    for (int i = 0; i < pipeline->arg_count2; i++) {
-        free(pipeline->args2[i]);
-    }
-    free(pipeline);
     return NULL;
 }
 
 // Function to free pipeline structure
 void free_pipeline(Pipeline *pipeline) {
     if (pipeline) {
-        free(pipeline->cmd1);
-        free(pipeline->cmd2);
-        for (int i = 0; i < pipeline->arg_count1; i++) {
-            free(pipeline->args1[i]);
+        for (int i = 0; i < pipeline->num_commands; i++) {
+            free(pipeline->commands[i]);
+            for (int j = 0; j < pipeline->arg_counts[i]; j++) {
+                free(pipeline->args[i][j]);
+            }
+            free(pipeline->args[i]);
         }
-        for (int i = 0; i < pipeline->arg_count2; i++) {
-            free(pipeline->args2[i]);
-        }
+        free(pipeline->commands);
+        free(pipeline->args);
+        free(pipeline->arg_counts);
         free(pipeline);
     }
 }
 
 // Echo command without redirection handling - for pipeline use
-void pipeline_echo(char **args, int output_fd) {
-    // Redirect stdout to the pipe
-    int original_stdout = dup(STDOUT_FILENO);
-    if (original_stdout == -1) {
-        perror("dup failed");
-        return;
-    }
-    
-    if (dup2(output_fd, STDOUT_FILENO) == -1) {
-        perror("dup2 failed");
-        close(original_stdout);
-        return;
-    }
-    
+void pipeline_echo(char **args) {
     // Start from args[1] to skip the command name
+    int first_arg = 1;
+    
     for (int i = 1; args[i] != NULL; i++) {
         // Print space between arguments
         if (i > 1) {
@@ -870,272 +856,278 @@ void pipeline_echo(char **args, int output_fd) {
     }
     printf("\n");
     fflush(stdout);  // Make sure output is flushed to the pipe
+}
+
+// Function to execute a built-in command with pipe redirection
+int execute_builtin_with_pipe(const char *cmd, char **args, int pipe_in, int pipe_out) {
+    // Save original file descriptors
+    int original_stdin = -1;
+    int original_stdout = -1;
     
-    // Restore original stdout
-    if (dup2(original_stdout, STDOUT_FILENO) == -1) {
-        perror("dup2 failed");
+    // Set up input redirection if needed
+    if (pipe_in != -1) {
+        original_stdin = dup(STDIN_FILENO);
+        if (original_stdin == -1) {
+            perror("dup failed");
+            return 1;
+        }
+        if (dup2(pipe_in, STDIN_FILENO) == -1) {
+            perror("dup2 failed");
+            close(original_stdin);
+            return 1;
+        }
+        close(pipe_in);
     }
-    close(original_stdout);
+    
+    // Set up output redirection if needed
+    if (pipe_out != -1) {
+        original_stdout = dup(STDOUT_FILENO);
+        if (original_stdout == -1) {
+            perror("dup failed");
+            if (original_stdin != -1) {
+                dup2(original_stdin, STDIN_FILENO);
+                close(original_stdin);
+            }
+            return 1;
+        }
+        if (dup2(pipe_out, STDOUT_FILENO) == -1) {
+            perror("dup2 failed");
+            if (original_stdin != -1) {
+                dup2(original_stdin, STDIN_FILENO);
+                close(original_stdin);
+            }
+            close(original_stdout);
+            return 1;
+        }
+        close(pipe_out);
+    }
+    
+    int status = 0;
+    
+    // Execute the appropriate built-in command
+    if (strcmp(cmd, "echo") == 0) {
+        // Use specialized pipeline echo for direct output
+        pipeline_echo(args);
+    } else if (strcmp(cmd, "type") == 0) {
+        // Handle 'type' for pipelines
+        if (args[1] != NULL) {
+            // Check if it's a builtin
+            if (is_builtin(args[1])) {
+                printf("%s is a shell builtin\n", args[1]);
+            } else {
+                // Check if it's an executable in PATH
+                char *exec_path = find_executable(args[1]);
+                if (exec_path) {
+                    printf("%s is %s\n", args[1], exec_path);
+                    free(exec_path);
+                } else {
+                    printf("%s: not found\n", args[1]);
+                }
+            }
+        }
+    } else if (strcmp(cmd, "pwd") == 0) {
+        // PWD is simple, just call the handler
+        handle_pwd();
+    } else if (strcmp(cmd, "cd") == 0) {
+        // CD needs to be handled carefully
+        if (args[1] != NULL) {
+            // Try to change directory directly
+            if (chdir(args[1]) != 0) {
+                fprintf(stderr, "cd: %s: %s\n", args[1], strerror(errno));
+                status = 1;
+            }
+        } else {
+            fprintf(stderr, "cd: missing argument\n");
+            status = 1;
+        }
+    } else if (strcmp(cmd, "exit") == 0) {
+        exit(0);
+    }
+    
+    // Restore original file descriptors
+    if (original_stdin != -1) {
+        dup2(original_stdin, STDIN_FILENO);
+        close(original_stdin);
+    }
+    if (original_stdout != -1) {
+        dup2(original_stdout, STDOUT_FILENO);
+        close(original_stdout);
+    }
+    
+    return status;
 }
 
 // Function to execute a pipeline
 void execute_pipeline(Pipeline *pipeline) {
-    if (!pipeline || !pipeline->cmd1 || !pipeline->cmd2) {
+    if (!pipeline || pipeline->num_commands < 2) {
         return;
     }
     
-    // Create pipe
-    int pipefd[2];
-    if (pipe(pipefd) == -1) {
-        perror("pipe failed");
+    // Create array of pipes
+    int (*pipefd)[2] = malloc((pipeline->num_commands - 1) * sizeof(int[2]));
+    if (!pipefd) {
+        perror("malloc failed");
         free_pipeline(pipeline);
         return;
     }
     
-    // Check if first command is built-in
-    int cmd1_is_builtin = is_builtin(pipeline->cmd1);
+    // Create all pipes
+    for (int i = 0; i < pipeline->num_commands - 1; i++) {
+        if (pipe(pipefd[i]) == -1) {
+            perror("pipe failed");
+            // Close any pipes we've already created
+            for (int j = 0; j < i; j++) {
+                close(pipefd[j][0]);
+                close(pipefd[j][1]);
+            }
+            free(pipefd);
+            free_pipeline(pipeline);
+            return;
+        }
+    }
     
-    // First command - can be built-in or external
-    pid_t pid1;
-    if (cmd1_is_builtin) {
-        // Execute built-in first command directly
-        if (strcmp(pipeline->cmd1, "echo") == 0) {
-            pipeline_echo(pipeline->args1, pipefd[1]);
-        } else if (strcmp(pipeline->cmd1, "pwd") == 0) {
-            // Redirect stdout to pipe
-            int original_stdout = dup(STDOUT_FILENO);
-            if (dup2(pipefd[1], STDOUT_FILENO) != -1) {
-                handle_pwd();
-                dup2(original_stdout, STDOUT_FILENO);
-            }
-            close(original_stdout);
-        } else if (strcmp(pipeline->cmd1, "type") == 0) {
-            // Redirect stdout to pipe
-            int original_stdout = dup(STDOUT_FILENO);
-            if (dup2(pipefd[1], STDOUT_FILENO) != -1) {
-                if (pipeline->args1[1] != NULL) {
-                    if (is_builtin(pipeline->args1[1])) {
-                        printf("%s is a shell builtin\n", pipeline->args1[1]);
-                    } else {
-                        char *exec_path = find_executable(pipeline->args1[1]);
-                        if (exec_path) {
-                            printf("%s is %s\n", pipeline->args1[1], exec_path);
-                            free(exec_path);
-                        } else {
-                            printf("%s: not found\n", pipeline->args1[1]);
-                        }
-                    }
-                }
-                dup2(original_stdout, STDOUT_FILENO);
-            }
-            close(original_stdout);
+    // Create processes for each command
+    pid_t *pids = malloc(pipeline->num_commands * sizeof(pid_t));
+    if (!pids) {
+        perror("malloc failed");
+        // Close all pipes
+        for (int i = 0; i < pipeline->num_commands - 1; i++) {
+            close(pipefd[i][0]);
+            close(pipefd[i][1]);
         }
-        close(pipefd[1]); // Close write end of pipe
-        
-        // Check if second command is built-in
-        if (is_builtin(pipeline->cmd2)) {
-            // Execute built-in second command
-            if (strcmp(pipeline->cmd2, "type") == 0) {
-                // Redirect stdin from pipe
-                int original_stdin = dup(STDIN_FILENO);
-                if (dup2(pipefd[0], STDIN_FILENO) != -1) {
-                    if (pipeline->args2[1] != NULL) {
-                        if (is_builtin(pipeline->args2[1])) {
-                            printf("%s is a shell builtin\n", pipeline->args2[1]);
-                        } else {
-                            char *exec_path = find_executable(pipeline->args2[1]);
-                            if (exec_path) {
-                                printf("%s is %s\n", pipeline->args2[1], exec_path);
-                                free(exec_path);
-                            } else {
-                                printf("%s: not found\n", pipeline->args2[1]);
-                            }
-                        }
-                    }
-                    dup2(original_stdin, STDIN_FILENO);
-                }
-                close(original_stdin);
-            }
-            close(pipefd[0]); // Close read end of pipe
-        } else {
-            // Fork for second command (external)
-            pid_t pid2 = fork();
-            if (pid2 < 0) {
-                perror("fork failed");
-                close(pipefd[0]);
-                free_pipeline(pipeline);
-                return;
-            }
-            
-            if (pid2 == 0) {
-                // Child process for second command
-                if (dup2(pipefd[0], STDIN_FILENO) == -1) {
-                    perror("dup2 failed");
-                    exit(1);
-                }
-                close(pipefd[0]);
-                
-                // Find and execute second command
-                char *exec_path = find_executable(pipeline->cmd2);
-                if (!exec_path) {
-                    fprintf(stderr, "%s: command not found\n", pipeline->cmd2);
-                    exit(1);
-                }
-                
-                execv(exec_path, pipeline->args2);
-                perror("execv failed");
-                free(exec_path);
-                exit(1);
-            }
-            
-            // Parent process
-            close(pipefd[0]);
-            
-            // Wait for second command to complete
-            waitpid(pid2, NULL, 0);
-        }
-    } else {
-        // Fork for first command (external)
-        pid1 = fork();
-        if (pid1 < 0) {
+        free(pipefd);
+        free_pipeline(pipeline);
+        return;
+    }
+    
+    // Create a process for each command
+    for (int i = 0; i < pipeline->num_commands; i++) {
+        pids[i] = fork();
+        if (pids[i] < 0) {
             perror("fork failed");
-            close(pipefd[0]);
-            close(pipefd[1]);
+            // Kill any processes we've already created
+            for (int j = 0; j < i; j++) {
+                kill(pids[j], SIGTERM);
+            }
+            // Close all pipes
+            for (int j = 0; j < pipeline->num_commands - 1; j++) {
+                close(pipefd[j][0]);
+                close(pipefd[j][1]);
+            }
+            free(pids);
+            free(pipefd);
             free_pipeline(pipeline);
             return;
         }
         
-        if (pid1 == 0) {
-            // Child process for first command
-            close(pipefd[0]);
-            if (dup2(pipefd[1], STDOUT_FILENO) == -1) {
-                perror("dup2 failed");
-                exit(1);
-            }
-            close(pipefd[1]);
-            
-            // Find and execute first command
-            char *exec_path = find_executable(pipeline->cmd1);
-            if (!exec_path) {
-                fprintf(stderr, "%s: command not found\n", pipeline->cmd1);
-                exit(1);
+        if (pids[i] == 0) {
+            // Child process
+            // Close all pipe ends we don't need
+            for (int j = 0; j < pipeline->num_commands - 1; j++) {
+                if (j != i - 1) close(pipefd[j][0]);
+                if (j != i) close(pipefd[j][1]);
             }
             
-            execv(exec_path, pipeline->args1);
-            perror("execv failed");
-            free(exec_path);
-            exit(1);
-        }
-        
-        // Parent process
-        close(pipefd[1]);
-        
-        // Check if second command is built-in
-        if (is_builtin(pipeline->cmd2)) {
-            // Execute built-in second command
-            if (strcmp(pipeline->cmd2, "type") == 0) {
-                // Redirect stdin from pipe
-                int original_stdin = dup(STDIN_FILENO);
-                if (dup2(pipefd[0], STDIN_FILENO) != -1) {
-                    if (pipeline->args2[1] != NULL) {
-                        if (is_builtin(pipeline->args2[1])) {
-                            printf("%s is a shell builtin\n", pipeline->args2[1]);
-                        } else {
-                            char *exec_path = find_executable(pipeline->args2[1]);
-                            if (exec_path) {
-                                printf("%s is %s\n", pipeline->args2[1], exec_path);
-                                free(exec_path);
-                            } else {
-                                printf("%s: not found\n", pipeline->args2[1]);
-                            }
-                        }
-                    }
-                    dup2(original_stdin, STDIN_FILENO);
-                }
-                close(original_stdin);
-            }
-            close(pipefd[0]);
-            
-            // Wait for first command to complete
-            waitpid(pid1, NULL, 0);
-        } else {
-            // Fork for second command (external)
-            pid_t pid2 = fork();
-            if (pid2 < 0) {
-                perror("fork failed");
-                close(pipefd[0]);
-                free_pipeline(pipeline);
-                waitpid(pid1, NULL, 0);
-                return;
-            }
-            
-            if (pid2 == 0) {
-                // Child process for second command
-                if (dup2(pipefd[0], STDIN_FILENO) == -1) {
+            // Set up input redirection
+            if (i > 0) {
+                if (dup2(pipefd[i-1][0], STDIN_FILENO) == -1) {
                     perror("dup2 failed");
                     exit(1);
                 }
-                close(pipefd[0]);
-                
-                // Find and execute second command
-                char *exec_path = find_executable(pipeline->cmd2);
-                if (!exec_path) {
-                    fprintf(stderr, "%s: command not found\n", pipeline->cmd2);
+                close(pipefd[i-1][0]);
+            }
+            
+            // Set up output redirection
+            if (i < pipeline->num_commands - 1) {
+                if (dup2(pipefd[i][1], STDOUT_FILENO) == -1) {
+                    perror("dup2 failed");
                     exit(1);
                 }
-                
-                execv(exec_path, pipeline->args2);
-                perror("execv failed");
+                close(pipefd[i][1]);
+            }
+            
+            // Execute the command
+            if (is_builtin(pipeline->commands[i])) {
+                // For built-in commands, we need to handle them specially
+                if (strcmp(pipeline->commands[i], "echo") == 0) {
+                    // Use specialized pipeline echo for direct output
+                    pipeline_echo(pipeline->args[i]);
+                } else {
+                    // For other built-ins, use the standard handler
+                    execute_builtin_with_pipe(pipeline->commands[i], pipeline->args[i], -1, -1);
+                }
+                exit(0);
+            } else {
+                // For external commands, find and execute them
+                char *exec_path = find_executable(pipeline->commands[i]);
+                if (!exec_path) {
+                    fprintf(stderr, "%s: command not found\n", pipeline->commands[i]);
+                    exit(1);
+                }
+                execv(exec_path, pipeline->args[i]);
+                fprintf(stderr, "execv failed for %s: %s\n", exec_path, strerror(errno));
                 free(exec_path);
                 exit(1);
             }
-            
-            // Parent process
-            close(pipefd[0]);
-            
-            // Wait for both commands to complete
-            waitpid(pid1, NULL, 0);
-            waitpid(pid2, NULL, 0);
         }
     }
     
+    // Parent process
+    // Close all pipe ends
+    for (int i = 0; i < pipeline->num_commands - 1; i++) {
+        close(pipefd[i][0]);
+        close(pipefd[i][1]);
+    }
+    
+    // Wait for all children to complete
+    for (int i = 0; i < pipeline->num_commands; i++) {
+        int status;
+        waitpid(pids[i], &status, 0);
+    }
+    
+    free(pids);
+    free(pipefd);
     free_pipeline(pipeline);
 }
 
+// Function to create directories recursively
+void mkdir_recursive(const char *path) {
+    char tmp[MAX_PATH_LENGTH];
+    char *p = NULL;
+    size_t len;
+    
+    snprintf(tmp, sizeof(tmp), "%s", path);
+    len = strlen(tmp);
+    
+    if (tmp[len - 1] == '/') {
+        tmp[len - 1] = 0;  // Remove trailing slash if present
+    }
+    
+    for (p = tmp + 1; *p; p++) {
+        if (*p == '/') {
+            *p = 0;  // Temporarily terminate string at this slash
+            mkdir(tmp, 0777);  // Create directory (ignore errors)
+            *p = '/';  // Restore slash
+        }
+    }
+    
+    mkdir(tmp, 0777);  // Create final directory
+}
+
 void execute_command(char *input) {
-    // Check for pipeline first
+    // Check for pipeline
     Pipeline *pipeline = parse_pipeline(input);
-    if (pipeline) {
+    if (pipeline && pipeline->num_commands > 1) {
         execute_pipeline(pipeline);
         return;
     }
     
-    // If not a pipeline, check for built-in commands
-    if (strncmp(input, "echo ", 5) == 0) {
-        handle_echo(input);
-        return;
-    }
-    
-    if (strncmp(input, "type ", 5) == 0) {
-        handle_type(input);
-        return;
-    }
-    
-    if (strcmp(input, "pwd") == 0) {
-        handle_pwd();
-        return;
-    }
-    
-    if (strncmp(input, "cd ", 3) == 0) {
-        handle_cd(input);
-        return;
-    }
-    
-    // If not a built-in command, continue with normal command execution
+    // If not a pipeline or only has one command, continue with normal command execution
     // Make a copy of the input string because parse_redirection will modify it
     char *input_copy = strdup(input);
     if (!input_copy) {
         perror("strdup failed");
+        if (pipeline) free_pipeline(pipeline);
         return;
     }
     
@@ -1165,6 +1157,7 @@ void execute_command(char *input) {
                 free(redir);
             }
             free(input_copy);
+            if (pipeline) free_pipeline(pipeline);
             return;
         }
         
@@ -1190,6 +1183,7 @@ void execute_command(char *input) {
                             free(redir);
                         }
                         free(input_copy);
+                        if (pipeline) free_pipeline(pipeline);
                         return;
                     }
                     // Only escape special characters in double quotes
@@ -1218,6 +1212,7 @@ void execute_command(char *input) {
                     free(redir);
                 }
                 free(input_copy);
+                if (pipeline) free_pipeline(pipeline);
                 return;
             }
         } else {
@@ -1237,6 +1232,7 @@ void execute_command(char *input) {
                             free(redir);
                         }
                         free(input_copy);
+                        if (pipeline) free_pipeline(pipeline);
                         return;
                     }
                     if (*str == '\n') {
@@ -1268,7 +1264,131 @@ void execute_command(char *input) {
             free(redir);
         }
         free(input_copy);
+        if (pipeline) free_pipeline(pipeline);
         return;  // Empty command
+    }
+    
+    // Check for builtin commands
+    if (strcmp(args[0], "echo") == 0) {
+        handle_echo(input);
+        // Free allocated arguments
+        for (int i = 0; i < arg_count; i++) {
+            free(args[i]);
+        }
+        if (redir) {
+            free(redir->filename);
+            free(redir);
+        }
+        free(input_copy);
+        if (pipeline) free_pipeline(pipeline);
+        return;
+    } else if (strcmp(args[0], "exit") == 0) {
+        // Free allocated memory before exiting
+        for (int i = 0; i < arg_count; i++) {
+            free(args[i]);
+        }
+        if (redir) {
+            free(redir->filename);
+            free(redir);
+        }
+        free(input_copy);
+        if (pipeline) free_pipeline(pipeline);
+        exit(0);
+    } else if (strcmp(args[0], "type") == 0) {
+        if (arg_count > 1) {
+            // Check if it's a builtin
+            if (is_builtin(args[1])) {
+                printf("%s is a shell builtin\n", args[1]);
+            } else {
+                // Check if it's an executable in PATH
+                char *exec_path = find_executable(args[1]);
+                if (exec_path) {
+                    printf("%s is %s\n", args[1], exec_path);
+                    free(exec_path);
+                } else {
+                    printf("%s: not found\n", args[1]);
+                }
+            }
+        }
+        // Free allocated arguments
+        for (int i = 0; i < arg_count; i++) {
+            free(args[i]);
+        }
+        if (redir) {
+            free(redir->filename);
+            free(redir);
+        }
+        free(input_copy);
+        if (pipeline) free_pipeline(pipeline);
+        return;
+    } else if (strcmp(args[0], "pwd") == 0) {
+        handle_pwd();
+        // Free allocated arguments
+        for (int i = 0; i < arg_count; i++) {
+            free(args[i]);
+        }
+        if (redir) {
+            free(redir->filename);
+            free(redir);
+        }
+        free(input_copy);
+        if (pipeline) free_pipeline(pipeline);
+        return;
+    } else if (strcmp(args[0], "cd") == 0) {
+        if (arg_count > 1) {
+            char expanded_path[MAX_PATH_LENGTH];
+            
+            // Handle ~ character
+            if (args[1][0] == '~') {
+                char *home = getenv("HOME");
+                if (home == NULL) {
+                    fprintf(stderr, "cd: HOME environment variable not set\n");
+                    // Free allocated arguments
+                    for (int i = 0; i < arg_count; i++) {
+                        free(args[i]);
+                    }
+                    if (redir) {
+                        free(redir->filename);
+                        free(redir);
+                    }
+                    free(input_copy);
+                    if (pipeline) free_pipeline(pipeline);
+                    return;
+                }
+                
+                // If path is just ~, use home directory directly
+                if (args[1][1] == '\0') {
+                    strncpy(expanded_path, home, MAX_PATH_LENGTH - 1);
+                    expanded_path[MAX_PATH_LENGTH - 1] = '\0';
+                } else {
+                    // If path is ~/something, concatenate home and the rest of the path
+                    snprintf(expanded_path, MAX_PATH_LENGTH, "%s%s", home, args[1] + 1);
+                }
+                
+                // Try to change directory
+                if (chdir(expanded_path) != 0) {
+                    fprintf(stderr, "cd: %s: %s\n", expanded_path, strerror(errno));
+                }
+            } else {
+                // Try to change directory
+                if (chdir(args[1]) != 0) {
+                    fprintf(stderr, "cd: %s: %s\n", args[1], strerror(errno));
+                }
+            }
+        } else {
+            fprintf(stderr, "cd: missing argument\n");
+        }
+        // Free allocated arguments
+        for (int i = 0; i < arg_count; i++) {
+            free(args[i]);
+        }
+        if (redir) {
+            free(redir->filename);
+            free(redir);
+        }
+        free(input_copy);
+        if (pipeline) free_pipeline(pipeline);
+        return;
     }
     
     // Find the executable
@@ -1276,7 +1396,19 @@ void execute_command(char *input) {
     if (!exec_path) {
         // For command not found, we need to handle stderr redirection
         if (redir && redir->fd == 2) {
-            // Open the error file
+            // Create parent directories if they don't exist
+            char *last_slash = strrchr(redir->filename, '/');
+            if (last_slash != NULL) {
+                char dir_path[MAX_PATH_LENGTH];
+                strncpy(dir_path, redir->filename, last_slash - redir->filename);
+                dir_path[last_slash - redir->filename] = '\0';
+                
+                if (strlen(dir_path) > 0) {
+                    mkdir_recursive(dir_path);
+                }
+            }
+            
+            // Open output file with full permissions
             int flags = O_WRONLY | O_CREAT;
             flags |= redir->append ? O_APPEND : O_TRUNC;
             int error_fd = open(redir->filename, flags, 0666);
@@ -1307,6 +1439,7 @@ void execute_command(char *input) {
             free(redir);
         }
         free(input_copy);
+        if (pipeline) free_pipeline(pipeline);
         return;
     }
     
@@ -1324,6 +1457,7 @@ void execute_command(char *input) {
             free(redir);
         }
         free(input_copy);
+        if (pipeline) free_pipeline(pipeline);
         return;
     }
     
@@ -1338,24 +1472,7 @@ void execute_command(char *input) {
                 dir_path[last_slash - redir->filename] = '\0';
                 
                 if (strlen(dir_path) > 0) {
-                    // Create directory recursively (like mkdir -p)
-                    char *p = dir_path;
-                    while (*p != '\0') {
-                        if (*p == '/') {
-                            *p = '\0';  // Temporarily terminate string
-                            if (strlen(dir_path) > 0) {
-                                if (mkdir(dir_path, 0777) == -1 && errno != EEXIST) {
-                                    fprintf(stderr, "mkdir failed for %s: %s\n", dir_path, strerror(errno));
-                                }
-                            }
-                            *p = '/';  // Restore slash
-                        }
-                        p++;
-                    }
-                    // Create the final directory level
-                    if (mkdir(dir_path, 0777) == -1 && errno != EEXIST) {
-                        fprintf(stderr, "mkdir failed for %s: %s\n", dir_path, strerror(errno));
-                    }
+                    mkdir_recursive(dir_path);
                 }
             }
             
@@ -1400,6 +1517,7 @@ void execute_command(char *input) {
             free(redir);
         }
         free(input_copy);
+        if (pipeline) free_pipeline(pipeline);
     }
 }
 
@@ -1422,13 +1540,7 @@ int main(int argc, char *argv[]) {
             add_history(input);
         }
         
-        // Check for exit command
-        if (strcmp(input, "exit 0") == 0) {
-            free(input);
-            exit(0);
-        }
-        
-        // Execute command (handles both built-ins and pipelines)
+        // Execute the command
         execute_command(input);
         
         // Free the input string
@@ -1437,4 +1549,3 @@ int main(int argc, char *argv[]) {
     
     return 0;
 }
-
