@@ -1,74 +1,106 @@
-POSIX-Compliant Shell Implementation
+# POSIX-Compliant Shell Implementation
 
+---
 
 
 
 This project is a custom POSIX-compliant shell implementation in C, created as part of the CodeCrafters "Build Your Own Shell" challenge.
-Features
 
-Command Execution: Executes external programs with arguments
-Built-in Commands:
+🔗 GitHub Repo: [github.com/naeem0512/codecrafters-shell-c](https://github.com/naeem0512/codecrafters-shell-c)
 
-echo: Display text with proper handling of quotes and escapes
-exit: Terminate the shell
-type: Identify command types (builtins or executables)
-pwd: Print the current working directory
-cd: Change directory with support for absolute paths, relative paths, and the ~ character
+---
 
+## 🚀 Features
 
-Tab Completion: For both built-in and external commands
-Quoting Mechanisms:
+- **Command Execution**: Runs external programs with arguments
 
-Single quotes (')
-Double quotes (")
-Backslashes (\)
-Proper handling of escape sequences within quotes
+- **Built-in Commands**:
+  - `echo`: Handles quotes and escapes  
+  - `exit`: Terminates the shell  
+  - `type`: Identifies command types (builtins or executables)  
+  - `pwd`: Prints current working directory  
+  - `cd`: Supports absolute paths, relative paths, and `~`  
 
+- **Tab Completion**: For both built-in and external commands
 
-Output Redirection:
+- **Quoting Mechanisms**:
+  - Single quotes (`'`)
+  - Double quotes (`"`)
+  - Backslashes (`\`) for escape sequences
 
-Standard output (>, >>)
-Standard error (2>, 2>>)
+- **Output Redirection**:
+  - Standard Output: `>`, `>>`  
+  - Standard Error: `2>`, `2>>`
 
+- **Pipeline Support**:
+  - Execute pipelines like: `cmd1 | cmd2 | cmd3`
 
-Pipeline Support: Multiple commands in a pipeline (cmd1 | cmd2 | cmd3 | ...)
+---
 
-Building and Running
-Prerequisites
+## ⚙️ Building and Running
 
-GCC or another C compiler
-CMake
-Readline library (libreadline-dev on Debian/Ubuntu systems)
+### 🔧 Prerequisites
 
-Build Instructions
-bash# Clone the repository
-git clone https://github.com/yourusername/shell-implementation.git
-cd shell-implementation
+- GCC or another C compiler  
+- CMake  
+- Readline library (`libreadline-dev` on Debian/Ubuntu)
 
+---
+
+### 🧱 Build Instructions
+
+```bash
+# Clone the repository
+git clone https://github.com/naeem0512/codecrafters-shell-c.git
+cd codecrafters-shell-c
+````
+```bash
 # Build the project
 cmake .
 make
-Running the Shell
-bash./your_program.sh
-Implementation Details
-The shell is implemented using standard C libraries and system calls. Key components include:
+````
 
-Command Parsing: Handles quotes, escapes, and special characters
-Process Management: Uses fork(), exec() and related system calls
-File Descriptors: Manages I/O for redirections and pipelines
-Signal Handling: Ensures proper behavior with keyboard interrupts
-Environment Variable Expansion: For home directory (~)
-Executable Resolution: Searches PATH to find executable files
+---
 
-Learning Outcomes
-Through this project, I gained deeper knowledge of:
+### ▶️ Run the Shell
 
-POSIX standards and shell behavior
-Process creation and management in Unix-like systems
-File descriptor manipulation
-Command parsing and lexical analysis
-Input/output redirection
-Inter-process communication through pipes
+```bash
+./your_program.sh
+```
 
-Acknowledgements
-This project was completed as part of the CodeCrafters "Build Your Own Shell" challenge.
+
+---
+
+## 🛠️ Implementation Details
+
+This shell was built using standard C libraries and POSIX system calls. Key components include:
+
+* **Command Parsing**: Lexical handling of quotes, escapes, and control symbols
+* **Process Management**: `fork()`, `exec()`, and wait handling
+* **File Descriptors**: For redirection and pipelines
+* **Signal Handling**: Graceful response to keyboard interrupts (e.g., `Ctrl+C`)
+* **Environment Expansion**: Support for home (`~`) and `$PATH` resolution
+
+---
+
+## 📚 Learning Outcomes
+
+During this project, I deepened my understanding of:
+
+* POSIX-compliant shell behavior and standards
+* Process creation and inter-process communication
+* File descriptor control and I/O redirection
+* Building command interpreters and pipelines from scratch
+* Command parsing with lexical rules
+
+---
+
+## 🙏 Acknowledgements
+
+This project was built as part of the CodeCrafters **"Build Your Own Shell"** challenge.
+
+---
+
+## 📄 License
+
+This project is licensed under the **MIT License**.
